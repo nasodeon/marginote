@@ -27,8 +27,10 @@ def snapshot(db_path: Path, backups_dir: Path, keep: int) -> Path:
     return target
 
 
-def start_nightly(db_path: Path, backups_dir: Path, hour: int, keep: int) -> None:
+def start_maintenance(db_path: Path, backups_dir: Path, hour: int, keep: int, hourly=None) -> None:
+    """Background loop: a database snapshot every night at `hour`, and `hourly()` once an hour."""
     def loop() -> None:
+        last_hourly = 0.0
         while True:
             now = datetime.now()
             today = backups_dir / f"marginote-{now:%Y-%m-%d}.db"
@@ -37,6 +39,12 @@ def start_nightly(db_path: Path, backups_dir: Path, hour: int, keep: int) -> Non
                     snapshot(db_path, backups_dir, keep)
                 except Exception:  # keep the app running whatever happens
                     log.exception("Nightly backup failed")
+            if hourly and time.monotonic() - last_hourly >= 3600:
+                last_hourly = time.monotonic()
+                try:
+                    hourly()
+                except Exception:
+                    log.exception("Hourly maintenance failed")
             time.sleep(300)
 
-    threading.Thread(target=loop, name="nightly-backup", daemon=True).start()
+    threading.Thread(target=loop, name="maintenance", daemon=True).start()

@@ -70,7 +70,11 @@ CREATE VIRTUAL TABLE entries_fts USING fts5 (
 );
 """
 
-MIGRATIONS = [SCHEMA_V1]
+SCHEMA_V2 = """
+CREATE INDEX entries_photo ON entries (photo_id);
+"""
+
+MIGRATIONS = [SCHEMA_V1, SCHEMA_V2]
 
 
 def now() -> str:

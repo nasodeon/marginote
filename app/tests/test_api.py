@@ -206,3 +206,82 @@ def test_photos_are_cached_and_missing_files_give_404(logged_in, settings, monke
     assert logged_in.get(photo["image_url"]).status_code == 404
     book = logged_in.post("/api/books", json={"title": "Sans couverture"}).json()
     assert logged_in.get(f"/api/books/{book['id']}/cover").status_code == 404
+
+
+def _photo_path(settings, photo_id):
+    import sqlite3
+    conn = sqlite3.connect(settings.db_path)
+    try:
+        row = conn.execute("SELECT path FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def test_photos_wait_in_the_inbox_then_move_to_their_book(logged_in, settings, monkeypatch):
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "La Science et l’hypothèse : essai"}).json()
+    photo = logged_in.post("/api/photos", files={"file": ("p.jpg", make_page("168"), "image/jpeg")}).json()
+    assert _photo_path(settings, photo["id"]) == f"inbox/{photo['id']}.jpg"
+
+    logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": photo["id"], "text": "On fait la science"})
+    filed = _photo_path(settings, photo["id"])
+    folder = f"La Science et l’hypothèse essai ({book['id']})"     # ':' removed, Windows-safe
+    assert filed == f"{folder}/p168 - {photo['id'][:8]}.jpg"
+    assert (settings.photos_dir / filed).is_file()
+    assert not (settings.photos_dir / "inbox" / f"{photo['id']}.jpg").exists()
+    assert logged_in.get(photo["image_url"]).status_code == 200
+
+    # renaming the book renames its folder
+    logged_in.patch(f"/api/books/{book['id']}", json={"title": "La Science et l’hypothèse"})
+    renamed = _photo_path(settings, photo["id"])
+    assert renamed.startswith(f"La Science et l’hypothèse ({book['id']})/")
+    assert (settings.photos_dir / renamed).is_file() and not (settings.photos_dir / folder).exists()
+    assert logged_in.get(photo["image_url"]).status_code == 200
+
+
+def test_unused_photos_are_deleted_after_a_day_used_ones_are_kept(logged_in, settings, monkeypatch):
+    import sqlite3
+    from fastapi.testclient import TestClient
+    from marginote.main import create_app
+
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "Essais"}).json()
+    used = logged_in.post("/api/photos", files={"file": ("a.jpg", make_page("12"), "image/jpeg")}).json()
+    unused = logged_in.post("/api/photos", files={"file": ("b.jpg", make_page("13"), "image/jpeg")}).json()
+    fresh = logged_in.post("/api/photos", files={"file": ("c.jpg", make_page("14"), "image/jpeg")}).json()
+    logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": used["id"], "text": "Que sais-je ?"})
+
+    conn = sqlite3.connect(settings.db_path)        # make two photos look two days old
+    conn.execute("UPDATE photos SET created_at = '2020-01-01T00:00:00Z' WHERE id IN (?, ?)", (used["id"], unused["id"]))
+    conn.commit(); conn.close()
+    unused_file = settings.photos_dir / _photo_path(settings, unused["id"])
+
+    with TestClient(create_app(settings)):          # cleanup runs at start, then every hour
+        pass
+    assert _photo_path(settings, unused["id"]) is None and not unused_file.exists()
+    assert _photo_path(settings, used["id"]) is not None       # used by a quote: kept
+    assert _photo_path(settings, fresh["id"]) is not None      # unused but recent: kept for now
+
+
+def test_photos_from_the_first_version_are_filed_on_start(logged_in, settings, monkeypatch):
+    import sqlite3
+    from fastapi.testclient import TestClient
+    from marginote.main import create_app
+
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "Walden"}).json()
+    photo = logged_in.post("/api/photos", files={"file": ("w.jpg", make_page("90"), "image/jpeg")}).json()
+    logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": photo["id"], "text": "I went to the woods"})
+    # put it back where version 0.1 stored photos: photos/<year>/<month>/<id>.jpg
+    filed = settings.photos_dir / _photo_path(settings, photo["id"])
+    legacy = settings.photos_dir / "2026" / "11" / f"{photo['id']}.jpg"
+    legacy.parent.mkdir(parents=True); filed.replace(legacy)
+    conn = sqlite3.connect(settings.db_path)
+    conn.execute("UPDATE photos SET path = ? WHERE id = ?", (f"2026/11/{photo['id']}.jpg", photo["id"]))
+    conn.commit(); conn.close()
+
+    with TestClient(create_app(settings)):
+        pass
+    assert _photo_path(settings, photo["id"]) == f"Walden ({book['id']})/p90 - {photo['id'][:8]}.jpg"
+    assert not (settings.photos_dir / "2026").exists()        # empty old folders tidied away

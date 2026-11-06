@@ -15,7 +15,7 @@ import time
 import unicodedata
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -166,6 +166,27 @@ def blank_to_none(value: str | None) -> str | None:
     return value or None
 
 
+INBOX = "inbox"
+_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def book_folder(book_id: int, title: str) -> str:
+    """Readable, Windows-safe folder name for a book's photos: 'La Science et l'hypothèse (12)'."""
+    name = unicodedata.normalize("NFC", _UNSAFE.sub(" ", title))
+    name = re.sub(r"\s+", " ", name).strip(" .")[:60].strip(" .") or "Book"
+    return f"{name} ({book_id})"
+
+
+def photo_file_name(photo_id: str, page: str | None) -> str:
+    page_part = re.sub(r"[^0-9A-Za-z]", "", page or "")[:10]
+    return f"p{page_part} - {photo_id[:8]}.jpg" if page_part else f"{photo_id[:8]}.jpg"
+
+
+def is_unfiled(path: str) -> bool:
+    """Still in the inbox (or stored by the first version, by year and month)."""
+    return path.startswith(INBOX + "/") or re.match(r"^\d{4}/\d{2}/", path) is not None
+
+
 def slug(text: str) -> str:
     ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     return re.sub(r"[^A-Za-z0-9]+", "-", ascii_text).strip("-").lower() or "book"
@@ -184,7 +205,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logging.basicConfig(level=logging.INFO)
         if not settings.password:
             log.warning("MARGINOTE_PASSWORD is empty: nobody can log in until you set it in the compose file")
-        backup.start_nightly(settings.db_path, settings.backups_dir, settings.backup_hour, settings.backups_kept)
+        backup.start_maintenance(settings.db_path, settings.backups_dir, settings.backup_hour, settings.backups_kept,
+                                 hourly=clean_unused_photos)
         yield
 
     # The session cookie holds this tag, derived from the password: changing the password logs every device out.
@@ -267,6 +289,72 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         path.write_bytes(ocr.normalize_cover(image))
         conn.execute("UPDATE books SET cover_path = ?, updated_at = ? WHERE id = ?",
                      (path.name, db.now(), book_id))
+
+    def file_photo(conn: sqlite3.Connection, photo_id: str, book_id: int, page: str | None) -> None:
+        """Move a photo out of the inbox into its book's folder, named after the page."""
+        row = conn.execute("SELECT path FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        if not row or not is_unfiled(row["path"]):
+            return
+        title = conn.execute("SELECT title FROM books WHERE id = ?", (book_id,)).fetchone()["title"]
+        new_rel = f"{book_folder(book_id, title)}/{photo_file_name(photo_id, page)}"
+        src, dst = settings.photos_dir / row["path"], settings.photos_dir / new_rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_file():
+            src.replace(dst)
+        conn.execute("UPDATE photos SET path = ? WHERE id = ?", (new_rel, photo_id))
+
+    def rename_book_folder(conn: sqlite3.Connection, book_id: int, old_title: str, new_title: str) -> None:
+        old, new = book_folder(book_id, old_title), book_folder(book_id, new_title)
+        if old == new:
+            return
+        old_dir, new_dir = settings.photos_dir / old, settings.photos_dir / new
+        if old_dir.is_dir() and not new_dir.exists():
+            old_dir.rename(new_dir)
+        prefix = old + "/"
+        for row in conn.execute("SELECT id, path FROM photos WHERE substr(path, 1, ?) = ?",
+                                (len(prefix), prefix)).fetchall():
+            conn.execute("UPDATE photos SET path = ? WHERE id = ?", (new + "/" + row["path"][len(prefix):], row["id"]))
+
+    def refile_photos() -> None:
+        """Photos already used by a quote but still unfiled (from older versions): move them now."""
+        conn = db.connect(settings.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT p.id, p.path, e.book_id, e.page FROM photos p JOIN entries e ON e.photo_id = p.id GROUP BY p.id"
+            ).fetchall()
+            for row in rows:
+                if is_unfiled(row["path"]):
+                    file_photo(conn, row["id"], row["book_id"], row["page"])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def clean_unused_photos() -> int:
+        """Delete photos that no quote uses, once they are older than UNUSED_PHOTO_HOURS (24 h by default)."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=settings.unused_photo_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn = db.connect(settings.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, path FROM photos p WHERE created_at < ? "
+                "AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.photo_id = p.id)",
+                (cutoff,),
+            ).fetchall()
+            for row in rows:
+                (settings.photos_dir / row["path"]).unlink(missing_ok=True)
+                conn.execute("DELETE FROM photos WHERE id = ?", (row["id"],))
+            conn.commit()
+        finally:
+            conn.close()
+        folders = sorted((d for d in settings.photos_dir.rglob("*") if d.is_dir()), key=lambda d: len(d.parts), reverse=True)
+        for folder in folders:
+            if folder.name != INBOX and not any(folder.iterdir()):
+                folder.rmdir()
+        if rows:
+            log.info("Removed %d unused photos", len(rows))
+        return len(rows)
+
+    refile_photos()
+    clean_unused_photos()
 
     def fetch_cover_in_background(book_id: int, isbn: str | None, title: str, authors: str | None) -> None:
         try:
@@ -374,7 +462,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.patch("/api/books/{book_id}", tags=["books"], dependencies=auth)
     def update_book(book_id: int, body: BookPatch, conn: sqlite3.Connection = Depends(get_db)):
-        load_book(conn, book_id)
+        old_title = load_book(conn, book_id)["title"]
         changes = body.model_dump(exclude_unset=True)
         if "isbn" in changes and blank_to_none(changes["isbn"]):
             changes["isbn"] = lookup.clean_isbn(changes["isbn"])
@@ -389,12 +477,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                          (*changes.values(), db.now(), book_id))
             if {"title", "authors"} & changes.keys():
                 db.reindex_book(conn, book_id)
+            if "title" in changes:
+                rename_book_folder(conn, book_id, old_title, changes["title"])
             conn.commit()
         return book_dict(load_book(conn, book_id))
 
     @app.delete("/api/books/{book_id}", tags=["books"], dependencies=auth)
     def delete_book(book_id: int, conn: sqlite3.Connection = Depends(get_db)):
-        """Deletes the book and all its quotes and thoughts. Page photos stay in the photos folder."""
+        """Deletes the book and all its quotes and thoughts. Their photos are removed by the hourly cleanup."""
         row = load_book(conn, book_id)
         conn.execute("DELETE FROM entries_fts WHERE rowid IN (SELECT id FROM entries WHERE book_id = ?)", (book_id,))
         conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
@@ -489,7 +579,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/photos", tags=["photos"], dependencies=auth)
     def upload_photo(file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_db)):
-        """Send a photo of a page. Returns every recognized word (with its position) and the page number if found."""
+        """Send a photo of a page. Returns every recognized word (with its position) and the page number if found.
+
+        The photo waits in photos/inbox. Saving a quote from it files it under the book's folder;
+        a photo no quote uses is deleted after UNUSED_PHOTO_HOURS (24 h by default).
+        """
         data = file.file.read(MAX_UPLOAD + 1)
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "Photo larger than 30 MB")
@@ -511,7 +605,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             del img
         page = ocr.detect_page(words, width, height)
         photo_id = uuid.uuid4().hex
-        rel = Path(f"{datetime.now():%Y/%m}") / f"{photo_id}.jpg"
+        rel = Path(INBOX) / f"{photo_id}.jpg"
         target = settings.photos_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(jpeg)
@@ -574,6 +668,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         entry_id = cur.lastrowid
         db.set_entry_tags(conn, entry_id, body.tags)
         db.reindex_entry(conn, entry_id)
+        if body.photo_id:
+            file_photo(conn, body.photo_id, body.book_id, page)
         conn.commit()
         return entry_dict(conn, load_entry(conn, entry_id))
 

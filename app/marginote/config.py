@@ -21,6 +21,7 @@ class Settings:
     cookie_secure: bool
     backup_hour: int
     backups_kept: int
+    unused_photo_hours: int = 24
 
     @property
     def db_path(self) -> Path:
@@ -56,4 +57,5 @@ def load_settings() -> Settings:
         cookie_secure=_bool(os.environ.get("COOKIE_SECURE"), True),
         backup_hour=int(os.environ.get("BACKUP_HOUR", "3")),
         backups_kept=int(os.environ.get("BACKUPS_KEPT", "14")),
+        unused_photo_hours=int(os.environ.get("UNUSED_PHOTO_HOURS", "24")),
     )

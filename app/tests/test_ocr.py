@@ -62,3 +62,34 @@ def test_year_in_the_first_line_is_not_taken_for_the_page_number():
     for word in words:
         word.h = 30
     assert ocr.detect_page(words, 1200, 1700) == "45"
+
+
+def test_words_in_a_spine_shadow_are_still_read():
+    """Text running to the page edge with a dark gradient along it, like the spine of an open book."""
+    import collections
+
+    from conftest import _font
+    from PIL import Image, ImageDraw, ImageFilter, ImageOps
+
+    words = ("On fait la science avec des faits comme on fait une maison avec des pierres mais une "
+             "accumulation de faits n’est pas plus une science qu’un tas de pierres n’est une maison").split()
+    img = Image.new("L", (1800, 1200), 236)
+    draw, font, truth, k, y = ImageDraw.Draw(img), _font(46), [], 0, 120
+    while y < 1080:
+        x = 6
+        while x + draw.textlength(words[k % len(words)], font=font) < 1794:
+            word = words[k % len(words)]
+            draw.text((x, y), word, font=font, fill=30)
+            truth.append(word)
+            x += draw.textlength(word + " ", font=font)
+            k += 1
+        y += 74
+    shade = ImageOps.invert(Image.linear_gradient("L").rotate(90, expand=True).resize((380, 1200)))
+    img.paste(Image.composite(Image.new("L", (380, 1200), 70), img.crop((0, 0, 380, 1200)),
+                              shade.point(lambda v: int(v * 0.85))), (0, 0))
+    img = img.filter(ImageFilter.GaussianBlur(0.8)).convert("RGB")
+
+    got = collections.Counter(w.text.strip(".,;:") for w in ocr.recognize(img, "fra+eng"))
+    want = collections.Counter(truth)
+    recall = sum(min(got[w], n) for w, n in want.items()) / sum(want.values())
+    assert recall > 0.93, recall      # about 0.83 without the lighting correction
