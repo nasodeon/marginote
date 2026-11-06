@@ -51,3 +51,14 @@ def test_page_number_not_confused_with_numbers_in_text():
     img, _ = ocr.normalize_photo(make_page("27"))
     words = ocr.recognize(img, "fra+eng")
     assert ocr.detect_page(words, img.width, img.height) == "27"
+
+
+def test_year_in_the_first_line_is_not_taken_for_the_page_number():
+    words = [
+        w(0, "1902", 0, x=500, y=40),       # a year alone near the top edge
+        w(1, "Première", 1, x=100, y=300), w(2, "édition", 1, x=300, y=300),
+        w(3, "45", 2, x=500, y=1640),       # the real page number at the bottom
+    ]
+    for word in words:
+        word.h = 30
+    assert ocr.detect_page(words, 1200, 1700) == "45"

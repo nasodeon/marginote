@@ -81,13 +81,13 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
 def migrate(db_path: Path) -> None:
     conn = connect(db_path)
     try:
+        conn.execute("PRAGMA journal_mode = WAL")  # stored in the file: set once, applies to every connection
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         for number, script in enumerate(MIGRATIONS, start=1):
             if version < number:
@@ -138,6 +138,16 @@ def set_entry_tags(conn: sqlite3.Connection, entry_id: int, names: list[str]) ->
         tag_id = row["id"] if row else conn.execute("INSERT INTO tags (name) VALUES (?)", (name,)).lastrowid
         conn.execute("INSERT OR IGNORE INTO entry_tags (entry_id, tag_id) VALUES (?, ?)", (entry_id, tag_id))
     conn.execute("DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM entry_tags)")
+
+
+TAG_LIST_SQL = (
+    "(SELECT group_concat(t.name, char(31)) FROM entry_tags et JOIN tags t ON t.id = et.tag_id "
+    "WHERE et.entry_id = e.id) AS tag_list"
+)
+
+
+def split_tag_list(value: str | None) -> list[str]:
+    return sorted(value.split("\x1f"), key=str.lower) if value else []
 
 
 def entry_tags(conn: sqlite3.Connection, entry_id: int) -> list[str]:

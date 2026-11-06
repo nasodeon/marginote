@@ -1,5 +1,5 @@
-# On every push to main: run the tests, then build the Docker image and publish it to
-# ghcr.io/<owner>/marginote. Uses only GitHub's built-in token; no secrets to set up.
+# On every push to main: run the tests, build the Docker image, start it once as a check,
+# then publish it to ghcr.io/<owner>/marginote. Uses only GitHub's built-in token; no secrets to set up.
 name: Test and publish image
 
 on:
@@ -15,10 +15,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Tesseract (French and English)
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-fra tesseract-ocr-eng fonts-dejavu-core
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install Python packages
@@ -31,17 +31,40 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Image name in lowercase
         id: name
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          load: true
+          tags: marginote:check
+
+      - name: Start it as user 1000:10 and check it works
+        run: |
+          mkdir -p "$RUNNER_TEMP/data" && sudo chown 1000:10 "$RUNNER_TEMP/data"
+          docker run -d --name check --user 1000:10 -e MARGINOTE_PASSWORD=check \
+            -v "$RUNNER_TEMP/data:/data" marginote:check
+          ok=0
+          for i in $(seq 1 30); do
+            if docker exec check python -c "import json, urllib.request; d = json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health')); assert set(d['ocr_languages']) == {'fra', 'eng'} and d['password_set'], d; print(d)"; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs check
+          ls -la "$RUNNER_TEMP/data"
+          test "$ok" = 1
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - name: Publish
+        uses: docker/build-push-action@v6
         with:
           context: ./app
           push: true

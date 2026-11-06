@@ -35,8 +35,20 @@ Everything lives in the data folder: `marginote.db` (books, quotes, tags), `phot
 
 ## Privacy
 
-Nothing leaves your server except book lookups: an ISBN, or a title and author when a cover is
-searched. Set `LOOKUPS_ENABLED=false` to turn them off.
+- Nothing leaves your server except book lookups: an ISBN, or a title and author when a cover is
+  searched. Set `LOOKUPS_ENABLED=false` to turn them off.
+- The app listens only inside the Tailscale container: it is not reachable from your local network
+  or the internet, only from your own tailnet devices.
+- Page photos are stored without any metadata (no location, camera or date). The test page also
+  shrinks photos on the phone before sending them.
+- No access log: your searches and the pages you open are not written to the Docker logs.
+- The password lives only in your compose file; it is never written to the database. Changing it
+  logs every device out.
+
+## Resources
+
+Measured: about 100 MB of memory at rest, about 270 MB at most while reading a page (one page at a
+time), about 2 seconds per page. Tesseract uses a single core.
 
 ## Tests
 

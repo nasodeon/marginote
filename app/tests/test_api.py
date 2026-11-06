@@ -44,7 +44,9 @@ def test_book_with_cover_found_online(logged_in, monkeypatch):
                                            "publisher": "Flammarion", "year": 1902, "language": "fr"})
     assert r.status_code == 201
     book = r.json()
-    assert book["cover_found"] is True and book["cover_url"]
+    assert book["cover_pending"] is True  # answered at once; the cover is fetched afterwards
+    book = logged_in.get(f"/api/books/{book['id']}").json()
+    assert book["has_cover"] is True
     img = logged_in.get(book["cover_url"])
     assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg"
 
@@ -58,7 +60,7 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
     book = logged_in.post("/api/books", json={"title": "La Science et l’hypothèse",
                                               "authors": "Henri Poincaré"}).json()
-    assert book["cover_found"] is False
+    assert logged_in.get(f"/api/books/{book['id']}").json()["has_cover"] is False
 
     # photo of a page -> words, page number
     photo = logged_in.post("/api/photos", files={"file": ("page.jpg", make_page("168"), "image/jpeg")}).json()
@@ -148,3 +150,59 @@ def test_iphone_heic_photo_is_accepted(logged_in):
     photo = logged_in.post("/api/photos", files={"file": ("IMG_0001.HEIC", out.getvalue(), "image/heic")})
     assert photo.status_code == 200
     assert photo.json()["detected_page"] == "42"
+
+
+def test_photo_metadata_is_removed_and_rotation_applied(logged_in, settings):
+    """A phone photo taken sideways, with camera and GPS tags: stored upright and without any metadata."""
+    sideways = Image.open(io.BytesIO(make_page("168"))).rotate(90, expand=True)
+    exif = Image.Exif()
+    exif[0x0112] = 6                    # orientation: turn 90° clockwise to view
+    exif[0x010F] = "PhoneMaker"         # camera make
+    exif[0x0110] = "PhoneModel"         # camera model
+    exif[0x8825] = {1: "N", 2: (48.0, 51.0, 30.0), 3: "E", 4: (2.0, 20.0, 15.0)}  # GPS position
+    out = io.BytesIO()
+    sideways.save(out, format="JPEG", exif=exif, quality=92)
+    assert Image.open(io.BytesIO(out.getvalue())).getexif().get(0x010F) == "PhoneMaker"
+
+    photo = logged_in.post("/api/photos", files={"file": ("IMG_0002.JPG", out.getvalue(), "image/jpeg")}).json()
+    assert photo["height"] > photo["width"]          # upright again
+    assert photo["detected_page"] == "168"           # and readable
+    stored_path = next(settings.photos_dir.rglob(f"{photo['id']}.jpg"))
+    assert len(Image.open(stored_path).getexif()) == 0     # no camera, date or location left
+    assert b"PhoneMaker" not in stored_path.read_bytes()
+
+
+def test_isbn_lookup_merges_both_sources(monkeypatch):
+    monkeypatch.setattr(lookup, "_open_library", lambda isbn: {"title": "Walden", "authors": "Henry David Thoreau",
+                                                               "publisher": None, "year": 2004})
+    monkeypatch.setattr(lookup, "_google_books", lambda isbn: {"title": "Walden (ed.)", "publisher": "Penguin",
+                                                               "language": "en"})
+    found = lookup.lookup_isbn("9780143106241")
+    assert found == {"title": "Walden", "authors": "Henry David Thoreau", "year": 2004, "publisher": "Penguin",
+                     "language": "en", "source": "Open Library", "isbn": "9780143106241"}
+    monkeypatch.setattr(lookup, "_open_library", lambda isbn: {})
+    monkeypatch.setattr(lookup, "_google_books", lambda isbn: {})
+    assert lookup.lookup_isbn("9780143106241") is None
+
+
+def test_changing_the_password_logs_every_device_out(logged_in, settings):
+    from dataclasses import replace
+    from fastapi.testclient import TestClient
+    from marginote.main import create_app
+
+    assert logged_in.get("/api/books").status_code == 200
+    with TestClient(create_app(replace(settings, password="a new password"))) as restarted:
+        restarted.cookies = logged_in.cookies          # the same browser, after the password change
+        assert restarted.get("/api/books").status_code == 401
+        assert restarted.get("/api/me").json() == {"logged_in": False}
+
+
+def test_photos_are_cached_and_missing_files_give_404(logged_in, settings, monkeypatch):
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    photo = logged_in.post("/api/photos", files={"file": ("p.jpg", make_page("9"), "image/jpeg")}).json()
+    r = logged_in.get(photo["image_url"])
+    assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
+    next(settings.photos_dir.rglob(f"{photo['id']}.jpg")).unlink()
+    assert logged_in.get(photo["image_url"]).status_code == 404
+    book = logged_in.post("/api/books", json={"title": "Sans couverture"}).json()
+    assert logged_in.get(f"/api/books/{book['id']}/cover").status_code == 404

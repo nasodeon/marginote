@@ -10,18 +10,20 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import time
 import unicodedata
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
 import pytesseract
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
-from PIL import UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -30,6 +32,11 @@ from .config import Settings, load_settings
 
 VERSION = "0.1.0"
 MAX_UPLOAD = 30 * 1024 * 1024
+BAD_IMAGE = (UnidentifiedImageError, OSError, Image.DecompressionBombError)
+# One page at a time: keeps memory predictable (about 270 MB at most) even if several photos arrive at once.
+OCR_SLOT = threading.Semaphore(1)
+PHOTO_CACHE = {"Cache-Control": "private, max-age=31536000, immutable"}  # a photo never changes
+COVER_CACHE = {"Cache-Control": "private, no-cache"}  # a cover can be replaced: revalidate
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("marginote")
 
@@ -51,7 +58,7 @@ class BookIn(BaseModel):
     isbn: str | None = None
     language: str | None = Field(None, description="e.g. 'fr' or 'en'")
     status: Literal["reading", "paused", "finished"] = "reading"
-    fetch_cover: bool = Field(True, description="Look for a cover online right away")
+    fetch_cover: bool = Field(True, description="Look for a cover online, in the background")
 
 
 class BookPatch(BaseModel):
@@ -139,7 +146,7 @@ def entry_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
         "text": row["text"],
         "note": row["note"],
         "page": row["page"],
-        "tags": db.entry_tags(conn, row["id"]),
+        "tags": db.split_tag_list(row["tag_list"]),
         "photo_id": row["photo_id"],
         "photo_url": f"/api/photos/{row['photo_id']}/image" if row["photo_id"] else None,
         "word_start": row["word_start"],
@@ -149,7 +156,7 @@ def entry_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     }
 
 
-ENTRY_SELECT = "SELECT e.*, b.title AS book_title FROM entries e JOIN books b ON b.id = e.book_id"
+ENTRY_SELECT = f"SELECT e.*, b.title AS book_title, {db.TAG_LIST_SQL} FROM entries e JOIN books b ON b.id = e.book_id"
 
 
 def blank_to_none(value: str | None) -> str | None:
@@ -180,6 +187,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         backup.start_nightly(settings.db_path, settings.backups_dir, settings.backup_hour, settings.backups_kept)
         yield
 
+    # The session cookie holds this tag, derived from the password: changing the password logs every device out.
+    login_tag = (
+        hmac.new(settings.secret_key().encode(), settings.password.encode(), hashlib.sha256).hexdigest()[:32]
+        if settings.password else ""
+    )
+
+    def logged_in(request: Request) -> bool:
+        return bool(login_tag) and hmac.compare_digest(str(request.session.get("ok", "")), login_tag)
+
     app = FastAPI(
         title="Marginote",
         version=VERSION,
@@ -207,7 +223,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             conn.close()
 
     def require_login(request: Request) -> None:
-        if not request.session.get("ok"):
+        if not logged_in(request):
             raise HTTPException(401, "Log in first with POST /api/login")
 
     auth = [Depends(require_login)]
@@ -252,16 +268,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         conn.execute("UPDATE books SET cover_path = ?, updated_at = ? WHERE id = ?",
                      (path.name, db.now(), book_id))
 
+    def fetch_cover_in_background(book_id: int, isbn: str | None, title: str, authors: str | None) -> None:
+        try:
+            image = lookup.find_cover(isbn, title, authors)
+            if not image:
+                return
+            conn = db.connect(settings.db_path)
+            try:
+                if conn.execute("SELECT 1 FROM books WHERE id = ?", (book_id,)).fetchone():
+                    save_cover(conn, book_id, image)
+                    conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            log.exception("Cover search failed for book %s", book_id)
+
     # ----- status and login -----
+
+    @lru_cache(maxsize=1)
+    def tesseract_info() -> tuple[str | None, frozenset]:
+        try:
+            return str(pytesseract.get_tesseract_version()), frozenset(pytesseract.get_languages(config=""))
+        except Exception:  # Tesseract missing
+            return None, frozenset()
 
     @app.get("/api/health", tags=["status"])
     def health():
         """Is the app running? No login needed."""
-        try:
-            installed = set(pytesseract.get_languages(config=""))
-            tesseract = str(pytesseract.get_tesseract_version())
-        except Exception:  # Tesseract missing
-            installed, tesseract = set(), None
+        tesseract, installed = tesseract_info()
         wanted = settings.ocr_langs.split("+")
         return {
             "status": "ok",
@@ -280,7 +314,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not hmac.compare_digest(body.password.encode(), settings.password.encode()):
             time.sleep(1)
             raise HTTPException(401, "Wrong password")
-        request.session["ok"] = True
+        request.session["ok"] = login_tag
         return {"logged_in": True}
 
     @app.post("/api/logout", tags=["status"])
@@ -290,7 +324,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/me", tags=["status"])
     def me(request: Request):
-        return {"logged_in": bool(request.session.get("ok"))}
+        return {"logged_in": logged_in(request)}
 
     # ----- books -----
 
@@ -310,7 +344,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return [book_dict(r) for r in rows]
 
     @app.post("/api/books", tags=["books"], dependencies=auth, status_code=201)
-    def create_book(body: BookIn, conn: sqlite3.Connection = Depends(get_db)):
+    def create_book(body: BookIn, background: BackgroundTasks, conn: sqlite3.Connection = Depends(get_db)):
+        """Saves the book at once; the cover is searched afterwards, so you never wait for it."""
         isbn = None
         if blank_to_none(body.isbn):
             isbn = lookup.clean_isbn(body.isbn)
@@ -327,14 +362,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             (*[values[k] for k in BOOK_FIELDS], stamp, stamp),
         )
         book_id = cur.lastrowid
-        cover_found = False
-        if body.fetch_cover and settings.lookups_enabled:
-            image = lookup.find_cover(isbn, values["title"], values["authors"])
-            if image:
-                save_cover(conn, book_id, image)
-                cover_found = True
         conn.commit()
-        return {**book_dict(load_book(conn, book_id)), "cover_found": cover_found}
+        cover_pending = body.fetch_cover and settings.lookups_enabled
+        if cover_pending:
+            background.add_task(fetch_cover_in_background, book_id, isbn, values["title"], values["authors"])
+        return {**book_dict(load_book(conn, book_id)), "cover_pending": cover_pending}
 
     @app.get("/api/books/{book_id}", tags=["books"], dependencies=auth)
     def get_book(book_id: int, conn: sqlite3.Connection = Depends(get_db)):
@@ -375,9 +407,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/books/{book_id}/cover", tags=["books"], dependencies=auth)
     def get_cover(book_id: int, conn: sqlite3.Connection = Depends(get_db)):
         row = load_book(conn, book_id)
-        if not row["cover_path"]:
+        path = settings.covers_dir / row["cover_path"] if row["cover_path"] else None
+        if not path or not path.is_file():
             raise HTTPException(404, "This book has no cover yet")
-        return FileResponse(settings.covers_dir / row["cover_path"], media_type="image/jpeg")
+        return FileResponse(path, media_type="image/jpeg", headers=COVER_CACHE)
 
     @app.post("/api/books/{book_id}/cover", tags=["books"], dependencies=auth)
     def upload_cover(book_id: int, file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_db)):
@@ -386,7 +419,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = file.file.read(MAX_UPLOAD + 1)
         try:
             save_cover(conn, book_id, data)
-        except (UnidentifiedImageError, OSError):
+        except BAD_IMAGE:
             raise HTTPException(415, "This file is not an image the app can read")
         conn.commit()
         return book_dict(load_book(conn, book_id))
@@ -464,21 +497,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         existing = conn.execute("SELECT * FROM photos WHERE sha256 = ?", (sha,)).fetchone()
         if existing:
             return photo_dict(existing)
-        try:
-            img, jpeg = ocr.normalize_photo(data)
-        except (UnidentifiedImageError, OSError):
-            raise HTTPException(415, "This file is not an image the app can read")
+        with OCR_SLOT:
+            try:
+                img, jpeg = ocr.normalize_photo(data)
+            except BAD_IMAGE:
+                raise HTTPException(415, "This file is not an image the app can read")
+            try:
+                words = ocr.recognize(img, settings.ocr_langs)
+            except pytesseract.TesseractError:
+                log.exception("Tesseract failed")
+                raise HTTPException(500, "Text recognition failed on this photo; try taking it again")
+            width, height = img.width, img.height
+            del img
+        page = ocr.detect_page(words, width, height)
         photo_id = uuid.uuid4().hex
         rel = Path(f"{datetime.now():%Y/%m}") / f"{photo_id}.jpg"
         target = settings.photos_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(jpeg)
-        words = ocr.recognize(img, settings.ocr_langs)
-        page = ocr.detect_page(words, img.width, img.height)
         conn.execute(
             "INSERT INTO photos (id, path, width, height, sha256, ocr_json, detected_page, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (photo_id, str(rel), img.width, img.height, sha,
+            (photo_id, str(rel), width, height, sha,
              json.dumps(ocr.words_to_dicts(words), ensure_ascii=False), page, db.now()),
         )
         conn.commit()
@@ -490,8 +530,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/photos/{photo_id}/image", tags=["photos"], dependencies=auth)
     def photo_image(photo_id: str, conn: sqlite3.Connection = Depends(get_db)):
-        row = load_photo(conn, photo_id)
-        return FileResponse(settings.photos_dir / row["path"], media_type="image/jpeg")
+        path = settings.photos_dir / load_photo(conn, photo_id)["path"]
+        if not path.is_file():
+            raise HTTPException(404, "The photo file is missing from the photos folder")
+        return FileResponse(path, media_type="image/jpeg", headers=PHOTO_CACHE)
 
     @app.post("/api/photos/{photo_id}/select", tags=["photos"], dependencies=auth)
     def select_words(photo_id: str, body: SelectIn, conn: sqlite3.Connection = Depends(get_db)):
@@ -640,7 +682,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not match:
             return []
         sql = (
-            "SELECT e.*, b.title AS book_title, "
+            f"SELECT e.*, b.title AS book_title, {db.TAG_LIST_SQL}, "
             "snippet(entries_fts, -1, '[', ']', '…', 16) AS snippet "
             "FROM entries_fts JOIN entries e ON e.id = entries_fts.rowid JOIN books b ON b.id = e.book_id "
             "WHERE entries_fts MATCH ?"

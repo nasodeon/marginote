@@ -155,20 +155,47 @@ $('add-book').onclick = async () => {
       title: $('b-title').value, authors: $('b-authors').value, publisher: $('b-publisher').value,
       year: $('b-year').value ? Number($('b-year').value) : null, isbn: $('isbn').value || null,
     }));
-    $('book-msg').textContent = `Added “${b.title}” (id ${b.id}) · cover ${b.cover_found ? 'found' : 'not found'}.`;
+    $('book-msg').textContent = `Added “${b.title}” (id ${b.id})` + (b.cover_pending ? ' · looking for a cover…' : '.');
     await loadBooks(b.id);
+    if (b.cover_pending) watchCover(b);
   } catch (e) { $('book-msg').textContent = e.message; }
 };
 
+async function watchCover(b) {
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const x = await api('/api/books/' + b.id);
+    if (x.has_cover) { $('book-msg').textContent = `Added “${x.title}” (id ${x.id}) · cover found.`; return; }
+  }
+  $('book-msg').textContent = `Added “${b.title}” (id ${b.id}) · no cover found online.`;
+}
+
+// Shrink the photo on the phone before sending it: a 3–8 MB photo becomes about 0.5 MB, so it uploads
+// much faster, and the copy sent carries no location, camera or date data. Falls back to the original.
+async function shrink(file) {
+  try {
+    const url = URL.createObjectURL(file);
+    const img = new Image(); img.src = url; await img.decode();
+    const scale = Math.min(1, 2400 / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale); canvas.height = Math.round(img.naturalHeight * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    return blob ? new File([blob], 'page.jpg', { type: 'image/jpeg' }) : file;
+  } catch { return file; }
+}
+
 $('file').onchange = async () => {
-  const f = $('file').files[0]; if (!f) return;
+  const original = $('file').files[0]; if (!original) return;
   $('ocr-msg').textContent = 'Reading the page… (a few seconds)';
+  const f = await shrink(original);
   const form = new FormData(); form.append('file', f);
   const t0 = performance.now();
   try {
     photo = await api('/api/photos', { method: 'POST', body: form });
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    $('ocr-msg').textContent = `${photo.words.length} words read in ${secs} s · page number: ${photo.detected_page || 'not found'}`;
+    $('ocr-msg').textContent = `${photo.words.length} words read in ${secs} s (sent ${Math.round(f.size / 1024)} KB) · page number: ${photo.detected_page || 'not found'}`;
     drawWords(); start = end = null;
     $('passage').hidden = true; $('save-box').hidden = true; $('tap-help').hidden = false;
   } catch (e) { $('ocr-msg').textContent = e.message; }

@@ -1,8 +1,12 @@
 """Photo handling and text recognition (Tesseract), page-number detection and passage selection."""
 
 import io
+import os
 import re
 from dataclasses import asdict, dataclass
+
+# One thread is the fastest for a single page (measured), and leaves the other cores free.
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
 import pytesseract
 from PIL import Image, ImageOps
@@ -30,8 +34,16 @@ class Word:
 
 
 def normalize_photo(data: bytes) -> tuple[Image.Image, bytes]:
-    """Open any phone photo, apply its rotation, shrink it, and return it plus a JPEG copy to store."""
+    """Open any phone photo, apply its rotation, shrink it, and return it plus a JPEG copy to store.
+
+    The stored copy carries no metadata: location, camera and date tags are dropped.
+    """
     img = Image.open(io.BytesIO(data))
+    if img.format == "JPEG":
+        # decode big photos at half or quarter size directly: less memory, faster
+        scale = MAX_SIDE / max(img.size)
+        if scale < 1:
+            img.draft("RGB", (int(img.size[0] * scale), int(img.size[1] * scale)))
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
     img.thumbnail((MAX_SIDE, MAX_SIDE))
@@ -119,6 +131,7 @@ def detect_page(words: list[Word], width: int, height: int) -> str | None:
             + (0.6 if is_digit else 0.0)
             + 0.5 * (1 - edge_dist / band)
             + (0.4 if per_line[w.line] <= 3 else 0.0)
+            - (0.5 if is_digit and len(token) == 4 else 0.0)  # more likely a year than a page
         )
         if best is None or score > best[0]:
             best = (score, token.lower())

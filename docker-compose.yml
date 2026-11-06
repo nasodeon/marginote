@@ -15,7 +15,7 @@ services:
     container_name: marginote-ts
     hostname: marginote
     environment:
-      - TS_AUTHKEY=tskey-auth-CHANGE-ME          # 1. your Tailscale auth key (only used on first start)
+      - TS_AUTHKEY=tskey-auth-CHANGE-ME          # 1. your Tailscale auth key (only used on first start; can be blanked after)
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_SERVE_CONFIG=/config/serve.json
       - TS_ACCEPT_DNS=false
@@ -24,6 +24,9 @@ services:
     configs:
       - source: tailscale-serve
         target: /config/serve.json
+    mem_limit: 256m                              # safety ceiling, not a reservation
+    logging:
+      options: { max-size: "5m", max-file: "3" } # keep Docker logs small
     restart: unless-stopped
 
   marginote:
@@ -41,6 +44,9 @@ services:
       - /volume1/docker/marginote/data:/data
     depends_on:
       - marginote-ts
+    mem_limit: 1g                                # safety ceiling: measured ~100 MB idle, ~270 MB while reading a page
+    logging:
+      options: { max-size: "5m", max-file: "3" }
     restart: unless-stopped
 
 # Tells Tailscale to pass HTTPS traffic to the app. $$ keeps the variable for Tailscale to fill in.
