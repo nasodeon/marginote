@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marginote · backend test</title>
+<style>
+  :root { --ink: #111418; --muted: #57606A; --line: #D8DEE4; --accent: #A3470D; --soft: #F6F8FA; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.45 -apple-system, system-ui, sans-serif; color: var(--ink); background: #fff; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 8px 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  section { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 14px 0; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  input, select, textarea, button { font: inherit; }
+  input, select, textarea { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 6px; margin: 4px 0 10px; }
+  button { min-height: 44px; padding: 0 16px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-weight: 600; }
+  button.secondary { background: var(--soft); color: var(--ink); border: 1px solid var(--line); }
+  label { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .photo { position: relative; margin: 10px 0; border: 1px solid var(--line); }
+  .photo img { display: block; width: 100%; height: auto; }
+  .word { position: absolute; border-radius: 2px; cursor: pointer; }
+  .word.on { background: rgba(242, 180, 60, 0.45); }
+  .word.edge { outline: 2px solid var(--accent); }
+  .passage { white-space: pre-wrap; background: var(--soft); padding: 10px; border-radius: 6px; }
+  .ok { color: #1F6F3A; } .bad { color: #A3261C; }
+  .entry { border-top: 1px solid var(--line); padding: 10px 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Marginote · backend test</h1>
+  <p class="muted">A plain page to check that everything works. The real interface comes next. All calls are also in the <a href="/docs">API documentation</a>.</p>
+
+  <section>
+    <h2>1. Status</h2>
+    <div id="health" class="mono">Checking…</div>
+  </section>
+
+  <section id="login-box" hidden>
+    <h2>2. Log in</h2>
+    <label for="password">Password (MARGINOTE_PASSWORD in the compose file)</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <button id="login">Log in</button>
+    <p id="login-msg" class="muted"></p>
+  </section>
+
+  <div id="app" hidden>
+    <section>
+      <h2>2. Add a book</h2>
+      <label for="isbn">ISBN (optional)</label>
+      <div class="row"><input id="isbn" inputmode="numeric" style="flex:1"><button class="secondary" id="find">Find</button></div>
+      <label for="b-title">Title</label><input id="b-title">
+      <label for="b-authors">Author</label><input id="b-authors">
+      <div class="row">
+        <div style="flex:1"><label for="b-publisher">Publisher</label><input id="b-publisher"></div>
+        <div style="width:110px"><label for="b-year">Year</label><input id="b-year" inputmode="numeric"></div>
+      </div>
+      <button id="add-book">Add book</button>
+      <p id="book-msg" class="muted"></p>
+    </section>
+
+    <section>
+      <h2>3. Read a page</h2>
+      <label for="file">Take or choose a photo of a page</label>
+      <input id="file" type="file" accept="image/*">
+      <p id="ocr-msg" class="muted"></p>
+      <div id="photo" class="photo" hidden><img id="img" alt="Your page"></div>
+      <p class="muted" id="tap-help" hidden>Tap the first word, then the last word of the passage.</p>
+      <div id="passage" class="passage" hidden></div>
+    </section>
+
+    <section id="save-box" hidden>
+      <h2>4. Save the quote</h2>
+      <label for="book">Book</label><select id="book"></select>
+      <label for="text">Passage (fix any typo)</label><textarea id="text" rows="5"></textarea>
+      <label for="page">Page</label><input id="page" inputmode="numeric">
+      <label for="note">Your note</label><textarea id="note" rows="2"></textarea>
+      <label for="tags">Tags, separated by commas</label><input id="tags">
+      <button id="save">Save quote</button>
+      <p id="save-msg" class="muted"></p>
+    </section>
+
+    <section>
+      <h2>5. Search</h2>
+      <div class="row"><input id="q" placeholder="e.g. maison" style="flex:1"><button class="secondary" id="search">Search</button></div>
+      <div id="results"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let photo = null, start = null, end = null;
+
+async function api(path, options = {}) {
+  const res = await fetch(path, { credentials: 'same-origin', ...options });
+  const body = res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text();
+  if (!res.ok) throw new Error(body?.detail ? (typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)) : res.status);
+  return body;
+}
+const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+async function init() {
+  try {
+    const h = await api('/api/health');
+    $('health').textContent =
+      `App ${h.version} running · Tesseract ${h.tesseract || 'MISSING'} · OCR languages: ${h.ocr_languages.join(', ') || 'none'}` +
+      (h.missing_ocr_languages.length ? ` · missing: ${h.missing_ocr_languages.join(', ')}` : '') +
+      ` · lookups ${h.lookups_enabled ? 'on' : 'off'} · password ${h.password_set ? 'set' : 'NOT SET'}`;
+    $('health').className = 'mono ' + (h.tesseract && h.password_set ? 'ok' : 'bad');
+  } catch (e) { $('health').textContent = 'Cannot reach the app: ' + e.message; $('health').className = 'mono bad'; }
+  const me = await api('/api/me');
+  me.logged_in ? showApp() : ($('login-box').hidden = false);
+}
+
+async function showApp() {
+  $('login-box').hidden = true; $('app').hidden = false;
+  await loadBooks();
+}
+
+async function loadBooks(selectId) {
+  const books = await api('/api/books');
+  const sel = $('book'); sel.replaceChildren();
+  for (const b of books) {
+    const o = document.createElement('option');
+    o.value = b.id; o.textContent = `${b.title}${b.authors ? ' — ' + b.authors : ''} (${b.entry_count})`;
+    sel.append(o);
+  }
+  if (selectId) sel.value = selectId;
+}
+
+$('login').onclick = async () => {
+  try { await api('/api/login', json('POST', { password: $('password').value })); showApp(); }
+  catch (e) { $('login-msg').textContent = e.message; }
+};
+
+$('find').onclick = async () => {
+  $('book-msg').textContent = 'Looking up…';
+  try {
+    const b = await api('/api/lookup/isbn/' + encodeURIComponent($('isbn').value));
+    $('b-title').value = b.title || ''; $('b-authors').value = b.authors || '';
+    $('b-publisher').value = b.publisher || ''; $('b-year').value = b.year || '';
+    $('book-msg').textContent = 'Found on ' + b.source + '. Check the details, then Add book.';
+  } catch (e) { $('book-msg').textContent = e.message; }
+};
+
+$('add-book').onclick = async () => {
+  $('book-msg').textContent = 'Adding and looking for a cover…';
+  try {
+    const b = await api('/api/books', json('POST', {
+      title: $('b-title').value, authors: $('b-authors').value, publisher: $('b-publisher').value,
+      year: $('b-year').value ? Number($('b-year').value) : null, isbn: $('isbn').value || null,
+    }));
+    $('book-msg').textContent = `Added “${b.title}” (id ${b.id}) · cover ${b.cover_found ? 'found' : 'not found'}.`;
+    await loadBooks(b.id);
+  } catch (e) { $('book-msg').textContent = e.message; }
+};
+
+$('file').onchange = async () => {
+  const f = $('file').files[0]; if (!f) return;
+  $('ocr-msg').textContent = 'Reading the page… (a few seconds)';
+  const form = new FormData(); form.append('file', f);
+  const t0 = performance.now();
+  try {
+    photo = await api('/api/photos', { method: 'POST', body: form });
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    $('ocr-msg').textContent = `${photo.words.length} words read in ${secs} s · page number: ${photo.detected_page || 'not found'}`;
+    drawWords(); start = end = null;
+    $('passage').hidden = true; $('save-box').hidden = true; $('tap-help').hidden = false;
+  } catch (e) { $('ocr-msg').textContent = e.message; }
+};
+
+function drawWords() {
+  const box = $('photo'); box.hidden = false;
+  box.querySelectorAll('.word').forEach((n) => n.remove());
+  $('img').src = photo.image_url;
+  for (const w of photo.words) {
+    const d = document.createElement('div');
+    d.className = 'word'; d.dataset.i = w.i;
+    d.style.left = (w.x / photo.width * 100) + '%'; d.style.top = (w.y / photo.height * 100) + '%';
+    d.style.width = (w.w / photo.width * 100) + '%'; d.style.height = (w.h / photo.height * 100) + '%';
+    d.onclick = () => tap(w.i);
+    box.append(d);
+  }
+}
+
+async function tap(i) {
+  if (start === null || end !== null) { start = i; end = null; }
+  else { end = i; }
+  const lo = Math.min(start, end ?? start), hi = Math.max(start, end ?? start);
+  document.querySelectorAll('.word').forEach((n) => {
+    const k = Number(n.dataset.i);
+    n.classList.toggle('on', k >= lo && k <= hi);
+    n.classList.toggle('edge', k === start || k === end);
+  });
+  if (end === null) return;
+  const sel = await api(`/api/photos/${photo.id}/select`, json('POST', { start, end }));
+  $('passage').textContent = sel.text; $('passage').hidden = false;
+  $('text').value = sel.text; $('page').value = photo.detected_page || '';
+  $('save-box').hidden = false;
+}
+
+$('save').onclick = async () => {
+  try {
+    const e = await api('/api/entries', json('POST', {
+      book_id: Number($('book').value), kind: 'quote', text: $('text').value, page: $('page').value,
+      note: $('note').value, photo_id: photo?.id, word_start: Math.min(start, end), word_end: Math.max(start, end),
+      tags: $('tags').value.split(',').map((t) => t.trim()).filter(Boolean),
+    }));
+    $('save-msg').textContent = `Saved quote ${e.id} to “${e.book_title}”, page ${e.page || '—'}.`;
+    await loadBooks($('book').value);
+  } catch (err) { $('save-msg').textContent = err.message; }
+};
+
+$('search').onclick = async () => {
+  const out = $('results'); out.replaceChildren();
+  try {
+    const hits = await api('/api/search?q=' + encodeURIComponent($('q').value));
+    if (!hits.length) { out.textContent = 'Nothing found.'; return; }
+    for (const h of hits) {
+      const div = document.createElement('div'); div.className = 'entry';
+      const p = document.createElement('div'); p.textContent = h.text;
+      const m = document.createElement('div'); m.className = 'muted';
+      m.textContent = `${h.book_title} · p. ${h.page || '—'}${h.tags.length ? ' · #' + h.tags.join(' #') : ''}${h.note ? ' · ' + h.note : ''}`;
+      div.append(p, m); out.append(div);
+    }
+  } catch (e) { out.textContent = e.message; }
+};
+
+init();
+</script>
+</body>
+</html>

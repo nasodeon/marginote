@@ -1,0 +1,57 @@
+# Marginote: book quotes and reading notes, self-hosted.
+#
+# Paste this whole file into your Docker app (its "Project" or "Stack" page), or run: docker compose up -d
+# Before deploying, replace the three values marked CHANGE-ME, and create the two folders
+# listed under "volumes" with your file manager.
+#
+# Two containers:
+# - marginote-ts gives the app its own private Tailscale address with HTTPS
+#   (https://marginote.<your-tailnet>.ts.net), reachable only from your own devices.
+# - marginote is the app. It shares marginote-ts's network, so nothing else can reach it.
+
+services:
+  marginote-ts:
+    image: tailscale/tailscale:latest
+    container_name: marginote-ts
+    hostname: marginote
+    environment:
+      - TS_AUTHKEY=tskey-auth-CHANGE-ME          # 1. your Tailscale auth key (only used on first start)
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_ACCEPT_DNS=false
+    volumes:
+      - /volume1/docker/marginote/tailscale:/var/lib/tailscale
+    configs:
+      - source: tailscale-serve
+        target: /config/serve.json
+    restart: unless-stopped
+
+  marginote:
+    image: ghcr.io/CHANGE-ME/marginote:latest    # 2. your GitHub user name, in lowercase
+    pull_policy: always
+    container_name: marginote
+    network_mode: service:marginote-ts
+    user: "1000:10"                              # owner of the data folder (user id : group id)
+    environment:
+      - MARGINOTE_PASSWORD=CHANGE-ME             # 3. the password you will log in with (no spaces, no $)
+      - OCR_LANGS=fra+eng
+      - LOOKUPS_ENABLED=true
+      - TZ=UTC                                   # optional: your time zone, as a tz database name
+    volumes:
+      - /volume1/docker/marginote/data:/data
+    depends_on:
+      - marginote-ts
+    restart: unless-stopped
+
+# Tells Tailscale to pass HTTPS traffic to the app. $$ keeps the variable for Tailscale to fill in.
+configs:
+  tailscale-serve:
+    content: |
+      {
+        "TCP": { "443": { "HTTPS": true } },
+        "Web": {
+          "$${TS_CERT_DOMAIN}:443": {
+            "Handlers": { "/": { "Proxy": "http://127.0.0.1:8000" } }
+          }
+        }
+      }
