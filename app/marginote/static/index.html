@@ -22,10 +22,12 @@
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .photo { position: relative; margin: 10px 0; border: 1px solid var(--line); }
   .photo img { display: block; width: 100%; height: auto; }
-  .word { position: absolute; border-radius: 2px; cursor: pointer; }
+  .word { position: absolute; border-radius: 2px; cursor: pointer; outline: 1px solid rgba(163, 71, 13, 0.35); }
   .word.on { background: rgba(242, 180, 60, 0.45); }
   .word.edge { outline: 2px solid var(--accent); }
   .passage { white-space: pre-wrap; background: var(--soft); padding: 10px; border-radius: 6px; }
+  .hint { background: #FFF4E5; border-radius: 6px; padding: 10px 12px; font-weight: 600; margin: 10px 0; }
+  details pre { white-space: pre-wrap; font: 14px/1.45 -apple-system, system-ui, sans-serif; background: var(--soft); padding: 10px; border-radius: 6px; }
   .ok { color: #1F6F3A; } .bad { color: #A3261C; }
   .entry { border-top: 1px solid var(--line); padding: 10px 0; }
   [hidden] { display: none !important; }
@@ -69,13 +71,16 @@
       <label for="file">Take or choose a photo of a page</label>
       <input id="file" type="file" accept="image/*">
       <p id="ocr-msg" class="muted"></p>
+      <details id="read-text" hidden><summary>Show everything the app read</summary><pre id="full-text"></pre></details>
+      <p class="hint" id="tap-help" hidden>Now select your passage on the photo: tap its first word, then its last word. Each outlined box is a word the app read.</p>
       <div id="photo" class="photo" hidden><img id="img" alt="Your page"></div>
-      <p class="muted" id="tap-help" hidden>Tap the first word, then the last word of the passage.</p>
       <div id="passage" class="passage" hidden></div>
     </section>
 
-    <section id="save-box" hidden>
+    <section>
       <h2>4. Save the quote</h2>
+      <p class="muted" id="save-wait">Select a passage on the photo first (step 3); the form appears here.</p>
+      <div id="save-form" hidden>
       <label for="book">Book</label><select id="book"></select>
       <label for="text">Passage (fix any typo)</label><textarea id="text" rows="5"></textarea>
       <label for="page">Page</label><input id="page" inputmode="numeric">
@@ -83,10 +88,12 @@
       <label for="tags">Tags, separated by commas</label><input id="tags">
       <button id="save">Save quote</button>
       <p id="save-msg" class="muted"></p>
+      </div>
     </section>
 
     <section>
-      <h2>5. Search</h2>
+      <h2>5. Search your saved quotes</h2>
+      <p class="muted">Searches the quotes and notes you have saved in step 4, not the photo.</p>
       <div class="row"><input id="q" placeholder="e.g. maison" style="flex:1"><button class="secondary" id="search">Search</button></div>
       <div id="results"></div>
     </section>
@@ -197,7 +204,8 @@ $('file').onchange = async () => {
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     $('ocr-msg').textContent = `${photo.words.length} words read in ${secs} s (sent ${Math.round(f.size / 1024)} KB) · page number: ${photo.detected_page || 'not found'}`;
     drawWords(); start = end = null;
-    $('passage').hidden = true; $('save-box').hidden = true; $('tap-help').hidden = false;
+    $('full-text').textContent = photo.text || '(nothing read)'; $('read-text').hidden = false;
+    $('passage').hidden = true; $('save-form').hidden = true; $('save-wait').hidden = false; $('tap-help').hidden = false;
   } catch (e) { $('ocr-msg').textContent = e.message; }
 };
 
@@ -228,7 +236,7 @@ async function tap(i) {
   const sel = await api(`/api/photos/${photo.id}/select`, json('POST', { start, end }));
   $('passage').textContent = sel.text; $('passage').hidden = false;
   $('text').value = sel.text; $('page').value = photo.detected_page || '';
-  $('save-box').hidden = false;
+  $('save-form').hidden = false; $('save-wait').hidden = true;
 }
 
 $('save').onclick = async () => {
