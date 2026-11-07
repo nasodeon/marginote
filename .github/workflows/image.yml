@@ -44,14 +44,14 @@ jobs:
           load: true
           tags: marginote:check
 
-      - name: Start it as user 1000:10 and check it works
+      - name: Start it as user 1000:10 and check it works (French, English, page straightening)
         run: |
           mkdir -p "$RUNNER_TEMP/data" && sudo chown 1000:10 "$RUNNER_TEMP/data"
           docker run -d --name check --user 1000:10 -e MARGINOTE_PASSWORD=check \
             -v "$RUNNER_TEMP/data:/data" marginote:check
           ok=0
           for i in $(seq 1 30); do
-            if docker exec check python -c "import json, urllib.request; d = json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health')); assert set(d['ocr_languages']) == {'fra', 'eng'} and d['password_set'], d; print(d)"; then ok=1; break; fi
+            if docker exec check python -c "import json, urllib.request; d = json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health')); assert set(d['ocr_languages']) == {'fra', 'eng'} and d['password_set'] and d['straighten_pages'], d; print(d)"; then ok=1; break; fi
             sleep 2
           done
           docker logs check

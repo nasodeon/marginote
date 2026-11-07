@@ -1,6 +1,7 @@
-from conftest import make_page
+import pytest
+from conftest import as_jpeg, bend_toward_spine, make_full_page, make_page, word_recall
 
-from marginote import ocr
+from marginote import dewarp, ocr
 from marginote.db import page_sort_key
 
 
@@ -93,3 +94,85 @@ def test_words_in_a_spine_shadow_are_still_read():
     want = collections.Counter(truth)
     recall = sum(min(got[w], n) for w, n in want.items()) / sum(want.values())
     assert recall > 0.93, recall      # about 0.83 without the lighting correction
+
+
+# ---------- straightening curved pages and the second look for the page number ----------
+
+needs_leptonica = pytest.mark.skipif(not dewarp.available(), reason="Leptonica library not found")
+
+
+@needs_leptonica
+def test_curved_page_is_straightened_before_reading():
+    page, written = make_full_page("6")
+    img, _ = ocr.normalize_photo(as_jpeg(bend_toward_spine(page)))
+
+    as_is = ocr.read_page(img, "fra+eng", straighten=False)
+    flat = ocr.read_page(img, "fra+eng")
+
+    assert not as_is.straightened and flat.straightened
+    assert word_recall([w.text for w in as_is.words], written) < 0.6   # about 0.35 measured
+    assert word_recall([w.text for w in flat.words], written) > 0.85   # about 0.92 measured
+    assert flat.page == "6"
+    # the kept photo is the straightened one, same size, and every word box lies inside it
+    assert flat.photo.size == img.size and flat.photo.mode == "RGB"
+    assert all(0 <= w.x and w.x + w.w <= img.width and 0 <= w.y and w.y + w.h <= img.height for w in flat.words)
+
+
+@needs_leptonica
+def test_flat_page_is_read_unchanged():
+    page, written = make_full_page("6")
+    img, _ = ocr.normalize_photo(as_jpeg(page))
+    plain = ocr.read_page(img, "fra+eng", straighten=False)
+    flat = ocr.read_page(img, "fra+eng")
+    assert word_recall([w.text for w in flat.words], written) >= word_recall([w.text for w in plain.words], written) - 0.02
+
+
+def test_short_page_without_enough_lines_is_kept_as_photographed():
+    img, _ = ocr.normalize_photo(make_page("168"))
+    reading = ocr.read_page(img, "fra+eng")
+    assert not reading.straightened and reading.photo is img and reading.page == "168"
+
+
+def test_reading_still_works_without_leptonica(monkeypatch):
+    monkeypatch.setattr(dewarp, "_lib", None)
+    assert not dewarp.available()
+    page, written = make_full_page("6")
+    reading = ocr.read_page(ocr.normalize_photo(as_jpeg(page))[0], "fra+eng")
+    assert not reading.straightened
+    assert word_recall([w.text for w in reading.words], written) > 0.85
+
+
+def test_page_number_found_below_the_text_despite_clutter():
+    """A lone digit Tesseract skipped, with a table edge below the page and the next page beside it."""
+    from PIL import ImageDraw, ImageOps
+
+    page, _ = make_full_page("6", lines=18)
+    draw = ImageDraw.Draw(page)
+    draw.rectangle((0, 1215, 1240, 1700), fill=(40, 38, 36))    # dark table under the page
+    draw.rectangle((1135, 0, 1240, 1700), fill=(60, 58, 56))    # edge of the facing page
+    gray = ImageOps.autocontrast(ocr.even_lighting(ImageOps.grayscale(page)), cutoff=1)
+    words = [w for w in ocr.recognize(page, "fra+eng") if w.text != "6"]   # as if it had been skipped
+    assert ocr.find_page_number(gray, words, "fra+eng") == "6"
+
+
+def test_no_page_number_invented_from_clutter():
+    from PIL import ImageDraw, ImageOps
+
+    page, _ = make_full_page("", lines=18)
+    draw = ImageDraw.Draw(page)
+    draw.rectangle((0, 1215, 1240, 1700), fill=(40, 38, 36))
+    draw.rectangle((1135, 0, 1240, 1700), fill=(60, 58, 56))
+    gray = ImageOps.autocontrast(ocr.even_lighting(ImageOps.grayscale(page)), cutoff=1)
+    assert ocr.find_page_number(gray, ocr.recognize(page, "fra+eng"), "fra+eng") is None
+
+
+def test_footnote_number_is_not_taken_for_the_page_number():
+    from conftest import _font
+    from PIL import ImageDraw, ImageOps
+
+    page, _ = make_full_page("", lines=18)
+    draw = ImageDraw.Draw(page)
+    draw.text((110, 1150), "1", font=_font(26), fill=(30, 28, 25))          # footnote mark set apart
+    draw.text((150, 1150), "Ibid., p. 12.", font=_font(26), fill=(30, 28, 25))
+    gray = ImageOps.autocontrast(ocr.even_lighting(ImageOps.grayscale(page)), cutoff=1)
+    assert ocr.find_page_number(gray, ocr.recognize(page, "fra+eng"), "fra+eng") is None

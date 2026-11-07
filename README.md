@@ -6,8 +6,9 @@ through your private Tailscale network.
 
 ## What is here
 
-- `app/` — the backend: FastAPI, SQLite full-text search, Tesseract text recognition (French and English),
-  page-number detection, book details and covers from Open Library (Google Books as fallback)
+- `app/` — the backend: FastAPI, SQLite full-text search, Tesseract text recognition (French and English)
+  with shadow removal and straightening of pages that curve toward the spine (Leptonica), page-number
+  detection, book details and covers from Open Library (Google Books as fallback)
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
@@ -33,6 +34,21 @@ The data folder is never touched.
 Everything lives in the data folder: `marginote.db` (books, quotes, tags), `photos/` (page photos),
 `covers/`, and `backups/` (a database snapshot every night at 03:00, last 14 kept).
 
+When a page was curved, the photo kept is the straightened one, since the word positions used to
+select a passage refer to it.
+
+## Options
+
+Set in the compose file's `environment` list; all optional.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `OCR_LANGS` | `fra+eng` | Languages to read |
+| `LOOKUPS_ENABLED` | `true` | Look up books and covers online |
+| `STRAIGHTEN_PAGES` | `true` | Straighten curved pages before reading (`false` keeps photos exactly as taken) |
+| `UNUSED_PHOTO_HOURS` | `24` | Delete photos no quote uses after this many hours |
+| `TZ` | `UTC` | Time zone, for the nightly backup hour |
+
 ## Privacy
 
 - Nothing leaves your server except book lookups: an ISBN, or a title and author when a cover is
@@ -47,8 +63,8 @@ Everything lives in the data folder: `marginote.db` (books, quotes, tags), `phot
 
 ## Resources
 
-Measured: about 100 MB of memory at rest, about 270 MB at most while reading a page (one page at a
-time), about 2 seconds per page. Tesseract uses a single core.
+Measured: about 100 MB of memory at rest, under 300 MB at most while reading a page (one page at a
+time), 2 to 4 seconds per page. Tesseract uses a single core.
 
 ## Tests
 
@@ -58,4 +74,5 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Tesseract with the `fra` and `eng` language packs must be installed.
+Tesseract with the `fra` and `eng` language packs must be installed (Leptonica comes with it; the
+straightening tests are skipped if it cannot be found).

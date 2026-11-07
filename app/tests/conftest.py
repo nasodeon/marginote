@@ -45,6 +45,63 @@ def make_page(page_number: str = "168", fmt: str = "JPEG") -> bytes:
     return out.getvalue()
 
 
+LONG_TEXT = (
+    "La lecture lente laisse au lecteur le temps de noter ce qui le frappe dans la marge "
+    "du livre, puis de revenir plus tard sur ces traces pour retrouver une idée, une image "
+    "ou une question restée ouverte depuis la première lecture du chapitre entier."
+).split()
+
+
+def make_full_page(page_number: str = "6", lines: int = 22) -> tuple[Image.Image, list[str]]:
+    """A page filled with text (enough lines to model a curve), page number just below the text.
+
+    Returns the image and the words written on it, in order.
+    """
+    img = Image.new("RGB", (1240, 1700), (250, 247, 240))
+    draw, font = ImageDraw.Draw(img), _font(34)
+    words, k, y, written = LONG_TEXT * 10, 0, 140, []
+    for _ in range(lines):
+        line: list[str] = []
+        while k < len(words) and draw.textlength(" ".join(line + [words[k]]), font=font) < 1020:
+            line.append(words[k])
+            k += 1
+        draw.text((110, y), " ".join(line), font=font, fill=(30, 28, 25))
+        written += line
+        y += 54
+    if page_number:
+        draw.text((610, y + 34), page_number, font=font, fill=(30, 28, 25))
+    return img, written
+
+
+def bend_toward_spine(img: Image.Image, strength: float = 0.14, reach: float = 0.45) -> Image.Image:
+    """Curve the lines near the left edge, like a page rising toward the spine of an open book."""
+    width, height = img.size
+    out = Image.new("RGB", img.size, (250, 247, 240))
+    step = 4
+    for x in range(0, width, step):
+        t = max(0.0, 1 - x / (reach * width))
+        stretch = 1 + strength * t * t
+        column = img.crop((x, 0, x + step, height)).resize((step, int(height * stretch)))
+        out.paste(column, (x, int((height - height * stretch) / 2)))
+    return out
+
+
+def as_jpeg(img: Image.Image) -> bytes:
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=90)
+    return out.getvalue()
+
+
+def word_recall(got: list[str], written: list[str]) -> float:
+    """Share of the written words found, in order (punctuation ignored)."""
+    import difflib
+
+    clean = [w.strip(".,;:") for w in got]
+    want = [w.strip(".,;:") for w in written]
+    matcher = difflib.SequenceMatcher(None, want, clean, autojunk=False)
+    return sum(b.size for b in matcher.get_matching_blocks()) / len(want)
+
+
 @pytest.fixture()
 def settings(tmp_path: Path) -> Settings:
     return Settings(

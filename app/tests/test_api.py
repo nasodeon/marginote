@@ -3,7 +3,7 @@ import io
 from conftest import make_page
 from PIL import Image
 
-from marginote import lookup
+from marginote import dewarp, lookup, ocr
 
 
 def cover_png() -> bytes:
@@ -17,6 +17,7 @@ def test_health_needs_no_login(client):
     assert body["status"] == "ok"
     assert set(body["ocr_languages"]) == {"fra", "eng"}
     assert body["password_set"] is True
+    assert body["straighten_pages"] is dewarp.available()
 
 
 def test_everything_else_needs_login(client):
@@ -285,3 +286,33 @@ def test_photos_from_the_first_version_are_filed_on_start(logged_in, settings, m
         pass
     assert _photo_path(settings, photo["id"]) == f"Walden ({book['id']})/p90 - {photo['id'][:8]}.jpg"
     assert not (settings.photos_dir / "2026").exists()        # empty old folders tidied away
+
+
+def test_curved_page_is_stored_straightened_and_words_match_it(logged_in, settings):
+    import dataclasses
+
+    import pytest
+    from conftest import as_jpeg, bend_toward_spine, make_full_page, word_recall
+    from fastapi.testclient import TestClient
+
+    from marginote.main import create_app
+
+    if not dewarp.available():
+        pytest.skip("Leptonica library not found")
+    page, written = make_full_page("6")
+    upload = as_jpeg(bend_toward_spine(page))
+    photo = logged_in.post("/api/photos", files={"file": ("curved.jpg", upload, "image/jpeg")}).json()
+    assert photo["detected_page"] == "6"
+    assert word_recall([w["text"] for w in photo["words"]], written) > 0.85
+    stored = logged_in.get(photo["image_url"]).content
+    assert Image.open(io.BytesIO(stored)).size == (photo["width"], photo["height"])
+    assert stored != ocr.normalize_photo(upload)[1]          # the straightened copy was kept
+
+    # with STRAIGHTEN_PAGES=false the photo is kept exactly as sent (shrunk, without metadata)
+    plain_settings = dataclasses.replace(settings, straighten_pages=False)
+    with TestClient(create_app(plain_settings)) as plain:
+        plain.post("/api/login", json={"password": "correct horse"})
+        other = upload[:-2] + b"\x00" + upload[-2:]          # a different file, so not seen as a duplicate
+        photo = plain.post("/api/photos", files={"file": ("curved2.jpg", other, "image/jpeg")}).json()
+        assert plain.get(photo["image_url"]).content == ocr.normalize_photo(other)[1]
+        assert plain.get("/api/health").json()["straighten_pages"] is False

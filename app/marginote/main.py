@@ -27,7 +27,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import backup, db, lookup, ocr
+from . import backup, db, dewarp, lookup, ocr
 from .config import Settings, load_settings
 
 VERSION = "0.1.0"
@@ -391,6 +391,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "tesseract": tesseract,
             "ocr_languages": [lang for lang in wanted if lang in installed],
             "missing_ocr_languages": [lang for lang in wanted if lang not in installed],
+            "straighten_pages": settings.straighten_pages and dewarp.available(),
             "lookups_enabled": settings.lookups_enabled,
             "password_set": bool(settings.password),
         }
@@ -597,13 +598,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except BAD_IMAGE:
                 raise HTTPException(415, "This file is not an image the app can read")
             try:
-                words = ocr.recognize(img, settings.ocr_langs)
+                reading = ocr.read_page(img, settings.ocr_langs, straighten=settings.straighten_pages)
             except pytesseract.TesseractError:
                 log.exception("Tesseract failed")
                 raise HTTPException(500, "Text recognition failed on this photo; try taking it again")
+            if reading.straightened:  # keep the straightened photo: word positions refer to it
+                jpeg = ocr.to_jpeg(reading.photo)
+            words, page = reading.words, reading.page
             width, height = img.width, img.height
-            del img
-        page = ocr.detect_page(words, width, height)
+            del img, reading
         photo_id = uuid.uuid4().hex
         rel = Path(INBOX) / f"{photo_id}.jpg"
         target = settings.photos_dir / rel

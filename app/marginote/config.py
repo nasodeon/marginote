@@ -22,6 +22,7 @@ class Settings:
     backup_hour: int
     backups_kept: int
     unused_photo_hours: int = 24
+    straighten_pages: bool = True
 
     @property
     def db_path(self) -> Path:
@@ -58,4 +59,5 @@ def load_settings() -> Settings:
         backup_hour=int(os.environ.get("BACKUP_HOUR", "3")),
         backups_kept=int(os.environ.get("BACKUPS_KEPT", "14")),
         unused_photo_hours=int(os.environ.get("UNUSED_PHOTO_HOURS", "24")),
+        straighten_pages=_bool(os.environ.get("STRAIGHTEN_PAGES"), True),
     )
