@@ -1,4 +1,4 @@
-# Marginote: book quotes and reading notes, self-hosted.
+# Marginote: quotes and notes on what you read, watch and listen to, self-hosted.
 #
 # Paste this whole file into your Docker app (its "Project" or "Stack" page), or run: docker compose up -d
 # Before deploying, replace the three values marked CHANGE-ME, and create the two folders
@@ -45,7 +45,7 @@ services:
       - /volume1/docker/marginote/data:/data
     depends_on:
       - marginote-ts
-    mem_limit: 1g                                # safety ceiling: measured ~100 MB idle, ~270 MB while reading a page
+    mem_limit: 512m                              # safety ceiling: measured ~65 MB idle, ~180 MB while reading a page
     logging:
       options: { max-size: "5m", max-file: "3" }
     restart: unless-stopped

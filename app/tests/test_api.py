@@ -23,7 +23,7 @@ def test_health_needs_no_login(client):
 
 
 def test_everything_else_needs_login(client):
-    assert client.get("/api/books").status_code == 401
+    assert client.get("/api/sources").status_code == 401
     assert client.post("/api/login", json={"password": "nope"}).status_code == 401
     assert client.get("/api/me").json() == {"logged_in": False}
 
@@ -51,27 +51,27 @@ def test_isbn_checks_and_lookup(logged_in, monkeypatch):
 
 def test_book_with_cover_found_online(logged_in, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda isbn, title, authors: cover_png())
-    r = logged_in.post("/api/books", json={"title": "La Science et l’hypothèse", "authors": "Henri Poincaré",
+    r = logged_in.post("/api/sources", json={"title": "La Science et l’hypothèse", "people": {"author": ["Henri Poincaré"]},
                                            "publisher": "Flammarion", "year": 1902, "language": "fr"})
     assert r.status_code == 201
     book = r.json()
     assert book["cover_pending"] is True  # answered at once; the cover is fetched afterwards
-    book = logged_in.get(f"/api/books/{book['id']}").json()
+    book = logged_in.get(f"/api/sources/{book['id']}").json()
     assert book["has_cover"] is True
     img = logged_in.get(book["cover_url"])
-    assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg"
+    assert img.status_code == 200 and img.headers["content-type"] == "image/webp"
 
 
 def test_bad_isbn_on_book_is_refused(logged_in):
-    r = logged_in.post("/api/books", json={"title": "X", "isbn": "123", "fetch_cover": False})
+    r = logged_in.post("/api/sources", json={"title": "X", "isbn": "123", "fetch_cover": False})
     assert r.status_code == 422
 
 
 def test_full_capture_flow(logged_in, settings, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "La Science et l’hypothèse",
-                                              "authors": "Henri Poincaré"}).json()
-    assert logged_in.get(f"/api/books/{book['id']}").json()["has_cover"] is False
+    book = logged_in.post("/api/sources", json={"title": "La Science et l’hypothèse",
+                                              "people": {"author": ["Henri Poincaré"]}}).json()
+    assert logged_in.get(f"/api/sources/{book['id']}").json()["has_cover"] is False
 
     # photo of a page -> words, page number
     photo = logged_in.post("/api/photos", files={"file": ("page.jpg", make_page("168"), "image/jpeg")}).json()
@@ -89,32 +89,33 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     preview = logged_in.post(f"/api/photos/{photo['id']}/select", json={"start": last, "end": first}).json()
     assert preview["text"].startswith("On fait la science") and preview["word_start"] == first
     quote = logged_in.post("/api/entries", json={
-        "book_id": book["id"], "photo_id": photo["id"], "word_start": first, "word_end": last,
-        "note": "Exemple parfait pour une introduction.", "tags": ["#épistémologie", "méthode"],
+        "source_id": book["id"], "photo_id": photo["id"], "word_start": first, "word_end": last,
+        "note": "Exemple parfait pour une introduction.", "topics": ["#épistémologie", "méthode"],
     })
     assert quote.status_code == 201
     quote = quote.json()
     assert quote["page"] == "168" and quote["text"] == preview["text"]
-    assert quote["tags"] == ["méthode", "épistémologie"]
+    assert [t["name"] for t in quote["topics"]] == ["méthode", "épistémologie"]
     assert logged_in.get(quote["photo_url"]).status_code == 200
     assert next(settings.photos_dir.rglob("*.webp"))
     assert logged_in.get(quote["photo_url"]).headers["content-type"] == "image/webp"
 
     thought = logged_in.post("/api/entries", json={
-        "book_id": book["id"], "kind": "thought", "text": "Comparer avec Duhem et sa mémoire des hypothèses.",
-        "page": "158", "tags": ["à creuser"],
+        "source_id": book["id"], "kind": "thought", "text": "Comparer avec Duhem et sa mémoire des hypothèses.",
+        "page": "158", "topics": ["à creuser"],
     }).json()
 
     # book page: page order puts p. 158 before p. 168
-    entries = logged_in.get(f"/api/books/{book['id']}/entries").json()
+    entries = logged_in.get(f"/api/sources/{book['id']}/entries").json()
     assert [e["id"] for e in entries] == [thought["id"], quote["id"]]
-    assert logged_in.get(f"/api/books/{book['id']}/entries", params={"tag": "à creuser"}).json()[0]["kind"] == "comment"
+    creuser = next(t for t in logged_in.get("/api/topics").json() if t["name"] == "à creuser")
+    assert logged_in.get("/api/entries", params={"topic_id": creuser["id"]}).json()[0]["kind"] == "comment"
 
-    listed = logged_in.get("/api/books").json()[0]
+    listed = logged_in.get("/api/sources").json()[0]
     assert listed["quote_count"] == 1 and listed["comment_count"] == 1
 
-    tags = {t["name"]: t["count"] for t in logged_in.get("/api/tags").json()}
-    assert tags == {"méthode": 1, "épistémologie": 1, "à creuser": 1}
+    topics = {t["name"]: t["entries"] for t in logged_in.get("/api/topics").json()}
+    assert topics == {"méthode": 1, "épistémologie": 1, "à creuser": 1}
 
     # search ignores accents and matches word starts and book titles
     assert [h["id"] for h in logged_in.get("/api/search", params={"q": "memoire"}).json()] == [thought["id"]]
@@ -122,14 +123,15 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     assert logged_in.get("/api/search", params={"q": "epistemo"}).json()[0]["id"] == quote["id"]
 
     # edit: new tags and page, reflected in search
-    patched = logged_in.patch(f"/api/entries/{quote['id']}", json={"tags": ["maison"], "page": "169"}).json()
-    assert patched["tags"] == ["maison"] and patched["page"] == "169"
+    patched = logged_in.patch(f"/api/entries/{quote['id']}", json={"topics": ["maison"], "page": "169"}).json()
+    assert [t["name"] for t in patched["topics"]] == ["maison"] and patched["page"] == "169"
     assert logged_in.get("/api/search", params={"q": "epistemo"}).json() == []
 
     # export
-    md = logged_in.get(f"/api/books/{book['id']}/export.md")
+    md = logged_in.get(f"/api/sources/{book['id']}/export.md")
     assert md.status_code == 200
     assert "> On fait la science" in md.text and "#maison" in md.text and "**Comment (p. 158):**" in md.text
+    assert "*Henri Poincaré*" in md.text
 
     # delete
     assert logged_in.delete(f"/api/entries/{thought['id']}").status_code == 200
@@ -137,14 +139,14 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
 
     # backup
     name = logged_in.post("/api/backup").json()["file"]
-    assert (settings.backups_dir / name).stat().st_size > 0
+    assert name.endswith(".zip") and (settings.backups_dir / name).stat().st_size > 0
 
 
 def test_renaming_a_book_updates_search(logged_in, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Essais"}).json()
-    logged_in.post("/api/entries", json={"book_id": book["id"], "text": "Parce que c’était lui, parce que c’était moi."})
-    logged_in.patch(f"/api/books/{book['id']}", json={"title": "Les Essais", "authors": "Montaigne"})
+    book = logged_in.post("/api/sources", json={"title": "Essais"}).json()
+    logged_in.post("/api/entries", json={"source_id": book["id"], "text": "Parce que c’était lui, parce que c’était moi."})
+    logged_in.patch(f"/api/sources/{book['id']}", json={"title": "Les Essais", "people": {"author": ["Montaigne"]}})
     assert len(logged_in.get("/api/search", params={"q": "montaigne"}).json()) == 1
 
 
@@ -203,10 +205,10 @@ def test_changing_the_password_logs_every_device_out(logged_in, settings):
     from fastapi.testclient import TestClient
     from marginote.main import create_app
 
-    assert logged_in.get("/api/books").status_code == 200
+    assert logged_in.get("/api/sources").status_code == 200
     with TestClient(create_app(replace(settings, password="a new password"))) as restarted:
         restarted.cookies = logged_in.cookies          # the same browser, after the password change
-        assert restarted.get("/api/books").status_code == 401
+        assert restarted.get("/api/sources").status_code == 401
         assert restarted.get("/api/me").json() == {"logged_in": False}
 
 
@@ -217,8 +219,8 @@ def test_photos_are_cached_and_missing_files_give_404(logged_in, settings, monke
     assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
     next(settings.photos_dir.rglob(f"{photo['id']}.webp")).unlink()
     assert logged_in.get(photo["image_url"]).status_code == 404
-    book = logged_in.post("/api/books", json={"title": "Sans couverture"}).json()
-    assert logged_in.get(f"/api/books/{book['id']}/cover").status_code == 404
+    book = logged_in.post("/api/sources", json={"title": "Sans couverture"}).json()
+    assert logged_in.get(f"/api/sources/{book['id']}/cover").status_code == 404
 
 
 def _photo_path(settings, photo_id):
@@ -233,11 +235,11 @@ def _photo_path(settings, photo_id):
 
 def test_photos_wait_in_the_inbox_then_move_to_their_book(logged_in, settings, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "La Science et l’hypothèse : essai"}).json()
+    book = logged_in.post("/api/sources", json={"title": "La Science et l’hypothèse : essai"}).json()
     photo = logged_in.post("/api/photos", files={"file": ("p.jpg", make_page("168"), "image/jpeg")}).json()
     assert _photo_path(settings, photo["id"]) == f"inbox/{photo['id']}.webp"
 
-    logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": photo["id"], "text": "On fait la science"})
+    logged_in.post("/api/entries", json={"source_id": book["id"], "photo_id": photo["id"], "text": "On fait la science"})
     filed = _photo_path(settings, photo["id"])
     folder = f"La Science et l’hypothèse essai ({book['id']})"     # ':' removed, Windows-safe
     assert filed == f"{folder}/p168 - {photo['id'][:8]}.webp"
@@ -246,7 +248,7 @@ def test_photos_wait_in_the_inbox_then_move_to_their_book(logged_in, settings, m
     assert logged_in.get(photo["image_url"]).status_code == 200
 
     # renaming the book renames its folder
-    logged_in.patch(f"/api/books/{book['id']}", json={"title": "La Science et l’hypothèse"})
+    logged_in.patch(f"/api/sources/{book['id']}", json={"title": "La Science et l’hypothèse"})
     renamed = _photo_path(settings, photo["id"])
     assert renamed.startswith(f"La Science et l’hypothèse ({book['id']})/")
     assert (settings.photos_dir / renamed).is_file() and not (settings.photos_dir / folder).exists()
@@ -259,11 +261,11 @@ def test_unused_photos_are_deleted_after_a_day_used_ones_are_kept(logged_in, set
     from marginote.main import create_app
 
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Essais"}).json()
+    book = logged_in.post("/api/sources", json={"title": "Essais"}).json()
     used = logged_in.post("/api/photos", files={"file": ("a.jpg", make_page("12"), "image/jpeg")}).json()
     unused = logged_in.post("/api/photos", files={"file": ("b.jpg", make_page("13"), "image/jpeg")}).json()
     fresh = logged_in.post("/api/photos", files={"file": ("c.jpg", make_page("14"), "image/jpeg")}).json()
-    logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": used["id"], "text": "Que sais-je ?"})
+    logged_in.post("/api/entries", json={"source_id": book["id"], "photo_id": used["id"], "text": "Que sais-je ?"})
 
     conn = sqlite3.connect(settings.db_path)        # make two photos look two days old
     conn.execute("UPDATE photos SET created_at = '2020-01-01T00:00:00Z' WHERE id IN (?, ?)", (used["id"], unused["id"]))
@@ -283,9 +285,9 @@ def test_photos_from_the_first_version_are_filed_on_start(logged_in, settings, m
     from marginote.main import create_app
 
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Walden"}).json()
+    book = logged_in.post("/api/sources", json={"title": "Walden"}).json()
     photo = logged_in.post("/api/photos", files={"file": ("w.jpg", make_page("90"), "image/jpeg")}).json()
-    logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": photo["id"], "text": "I went to the woods"})
+    logged_in.post("/api/entries", json={"source_id": book["id"], "photo_id": photo["id"], "text": "I went to the woods"})
     # put it back where version 0.1 stored photos: photos/<year>/<month>/<id>.jpg
     filed = settings.photos_dir / _photo_path(settings, photo["id"])
     legacy = settings.photos_dir / "2026" / "11" / f"{photo['id']}.jpg"
@@ -332,8 +334,8 @@ def test_curved_page_is_stored_straightened_and_words_match_it(logged_in, settin
 
 def test_search_marks_matches_without_clashing_with_brackets(logged_in, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Essai", "fetch_cover": False}).json()
-    logged_in.post("/api/entries", json={"book_id": book["id"], "text": "Une [comparaison] devient une image."})
+    book = logged_in.post("/api/sources", json={"title": "Essai", "fetch_cover": False}).json()
+    logged_in.post("/api/entries", json={"source_id": book["id"], "text": "Une [comparaison] devient une image."})
     hit = logged_in.get("/api/search", params={"q": "image"}).json()[0]
     assert "\u0002image\u0003" in hit["snippet"] and "[comparaison]" in hit["snippet"]
 
@@ -343,65 +345,48 @@ def test_many_requests_at_once_all_succeed(logged_in, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
 
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Pensées", "fetch_cover": False}).json()
+    book = logged_in.post("/api/sources", json={"title": "Pensées", "fetch_cover": False}).json()
     def add(n):
-        return logged_in.post("/api/entries", json={"book_id": book["id"], "text": f"Pensée {n}"}).status_code
+        return logged_in.post("/api/entries", json={"source_id": book["id"], "text": f"Pensée {n}"}).status_code
     with ThreadPoolExecutor(8) as pool:
         codes = list(pool.map(add, range(40)))
     assert codes == [201] * 40
-    assert len(logged_in.get(f"/api/books/{book['id']}/entries").json()) == 40
+    assert len(logged_in.get(f"/api/sources/{book['id']}/entries").json()) == 40
 
 
-def test_books_have_a_subject(logged_in, monkeypatch):
+def test_sources_have_a_kind_of_work(logged_in, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Walden", "subject": "Nature writing"}).json()
-    assert book["subject"] == "Nature writing"
-    assert logged_in.patch(f"/api/books/{book['id']}", json={"subject": "Philosophy"}).json()["subject"] == "Philosophy"
-    assert logged_in.patch(f"/api/books/{book['id']}", json={"subject": ""}).json()["subject"] is None
+    book = logged_in.post("/api/sources", json={"title": "Walden", "field": "Nature writing"}).json()
+    assert book["field"] == "Nature writing" and book["kind"] == "book"
+    assert logged_in.patch(f"/api/sources/{book['id']}", json={"field": "Philosophy"}).json()["field"] == "Philosophy"
+    assert logged_in.patch(f"/api/sources/{book['id']}", json={"field": ""}).json()["field"] is None
 
 
 def test_comments_are_called_comments(logged_in, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Essais", "fetch_cover": False}).json()
-    c = logged_in.post("/api/entries", json={"book_id": book["id"], "kind": "comment", "text": "À relire.", "page": "12"}).json()
-    q = logged_in.post("/api/entries", json={"book_id": book["id"], "text": "Que philosopher, c'est apprendre à mourir."}).json()
+    book = logged_in.post("/api/sources", json={"title": "Essais", "fetch_cover": False}).json()
+    c = logged_in.post("/api/entries", json={"source_id": book["id"], "kind": "comment", "text": "À relire.", "page": "12"}).json()
+    q = logged_in.post("/api/entries", json={"source_id": book["id"], "text": "Que philosopher, c'est apprendre à mourir."}).json()
     assert c["kind"] == "comment" and q["kind"] == "quote"
     assert [e["id"] for e in logged_in.get("/api/entries", params={"kind": "comment"}).json()] == [c["id"]]
-    assert logged_in.get(f"/api/books/{book['id']}").json()["comment_count"] == 1
+    assert logged_in.get(f"/api/sources/{book['id']}").json()["comment_count"] == 1
     assert logged_in.patch(f"/api/entries/{q['id']}", json={"kind": "comment"}).json()["kind"] == "comment"
     assert logged_in.patch(f"/api/entries/{q['id']}", json={"kind": None, "note": "x"}).json()["kind"] == "comment"
-    assert "**Comment (p. 12):** À relire." in logged_in.get(f"/api/books/{book['id']}/export.md").text
+    assert "**Comment (p. 12):** À relire." in logged_in.get(f"/api/sources/{book['id']}/export.md").text
 
 
 def test_several_entries_deleted_at_once_and_book_kept(logged_in, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Pensées", "fetch_cover": False}).json()
-    ids = [logged_in.post("/api/entries", json={"book_id": book["id"], "text": f"Pensée {n}", "tags": [f"t{n}"]}).json()["id"]
+    book = logged_in.post("/api/sources", json={"title": "Pensées", "fetch_cover": False}).json()
+    ids = [logged_in.post("/api/entries", json={"source_id": book["id"], "text": f"Pensée {n}", "topics": [f"t{n}"]}).json()["id"]
            for n in range(3)]
     r = logged_in.post("/api/entries/delete", json={"ids": ids[:2] + [999999]})
     assert r.status_code == 200 and r.json()["deleted"] == ids[:2]
-    assert [e["id"] for e in logged_in.get(f"/api/books/{book['id']}/entries").json()] == [ids[2]]
-    assert [t["name"] for t in logged_in.get("/api/tags").json()] == ["t2"]       # tags left unused are removed
+    assert [e["id"] for e in logged_in.get(f"/api/sources/{book['id']}/entries").json()] == [ids[2]]
+    assert [t["name"] for t in logged_in.get("/api/topics").json()] == ["t2"]       # topics left unused are removed
     assert logged_in.get("/api/search", params={"q": "Pensée"}).json()[0]["id"] == ids[2]
-    assert logged_in.get(f"/api/books/{book['id']}").status_code == 200
+    assert logged_in.get(f"/api/sources/{book['id']}").status_code == 200
     assert logged_in.post("/api/entries/delete", json={"ids": []}).status_code == 422
-
-
-def test_database_from_an_older_version_gets_the_subject_column(settings):
-    import sqlite3
-
-    from marginote import db
-    settings.data_dir.mkdir(parents=True)
-    conn = sqlite3.connect(settings.db_path)
-    conn.executescript(db.SCHEMA_V1 + db.SCHEMA_V2)
-    conn.execute("PRAGMA user_version = 2")
-    conn.execute("INSERT INTO books (title, created_at, updated_at) VALUES ('Walden', 'x', 'x')")
-    conn.commit(); conn.close()
-    db.migrate(settings.db_path)
-    conn = sqlite3.connect(settings.db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
-    assert conn.execute("SELECT title, subject FROM books").fetchall() == [("Walden", None)]
-    conn.close()
 
 
 # ---------- ISBN from a photo of the back cover ----------
@@ -460,21 +445,21 @@ def wait_until_read(client, photo_id, seconds=90):
 def test_inbox_photos_are_read_in_the_background_and_kept_until_sorted(logged_in, settings, monkeypatch):
     import sqlite3
 
-    from marginote import main
+    from marginote import routes_photos
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "La Science et l’hypothèse", "fetch_cover": False}).json()
+    book = logged_in.post("/api/sources", json={"title": "La Science et l’hypothèse", "fetch_cover": False}).json()
 
-    with main.OCR_SLOT:   # the reader waits: the photo stays "reading"
-        sent = logged_in.post("/api/photos", params={"later": "true", "book_id": book["id"]},
+    with routes_photos.OCR_SLOT:   # the reader waits: the photo stays "reading"
+        sent = logged_in.post("/api/photos", params={"later": "true", "source_id": book["id"]},
                               files={"file": ("p.jpg", make_page("168"), "image/jpeg")}).json()
         assert sent["status"] == "reading" and sent["queued"] and sent["words"] == []
-        r = logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": sent["id"], "text": "x"})
+        r = logged_in.post("/api/entries", json={"source_id": book["id"], "photo_id": sent["id"], "text": "x"})
         assert r.status_code == 409                       # cannot be used before it is read
     photo = wait_until_read(logged_in, sent["id"])
     assert photo["status"] == "ready" and photo["detected_page"] == "168" and len(photo["words"]) > 40
 
     inbox = logged_in.get("/api/photos").json()
-    assert [(p["id"], p["book_title"], p["entry_count"]) for p in inbox] == [(sent["id"], book["title"], 0)]
+    assert [(p["id"], p["source_title"], p["entry_count"]) for p in inbox] == [(sent["id"], book["title"], 0)]
     thumb = logged_in.get(inbox[0]["thumb_url"])
     assert thumb.headers["content-type"] == "image/webp" and Image.open(io.BytesIO(thumb.content)).width <= 320
 
@@ -488,7 +473,7 @@ def test_inbox_photos_are_read_in_the_background_and_kept_until_sorted(logged_in
 
     # sorting: a quote from it, then out of the inbox; it stays because a quote uses it
     first = next(w["i"] for w in photo["words"] if w["text"] == "On")
-    q = logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": sent["id"], "word_start": first, "word_end": first + 4})
+    q = logged_in.post("/api/entries", json={"source_id": book["id"], "photo_id": sent["id"], "word_start": first, "word_end": first + 4})
     assert q.status_code == 201
     assert logged_in.get("/api/photos").json()[0]["entry_count"] == 1
     assert logged_in.delete(f"/api/photos/{sent['id']}").status_code == 409
@@ -505,8 +490,8 @@ def test_inbox_photos_are_read_in_the_background_and_kept_until_sorted(logged_in
 def test_photos_left_unread_by_a_restart_are_read_on_start(logged_in, settings):
     import sqlite3
 
-    from marginote import main
-    with main.OCR_SLOT:
+    from marginote import routes_photos
+    with routes_photos.OCR_SLOT:
         sent = logged_in.post("/api/photos", params={"later": "true"}, files={"file": ("p.jpg", make_page("27"), "image/jpeg")}).json()
         # simulate a restart: a new app finds the photo still "reading" and queues it again
         conn = sqlite3.connect(settings.db_path)
@@ -528,15 +513,16 @@ def test_backup_status_and_everything_as_a_zip(logged_in, settings, monkeypatch)
     import zipfile
 
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
-    book = logged_in.post("/api/books", json={"title": "Walden", "fetch_cover": False}).json()
-    logged_in.post(f"/api/books/{book['id']}/cover", files={"file": ("c.png", cover_png(), "image/png")})
+    book = logged_in.post("/api/sources", json={"title": "Walden", "fetch_cover": False}).json()
+    logged_in.post(f"/api/sources/{book['id']}/cover", files={"file": ("c.png", cover_png(), "image/png")})
     photo = logged_in.post("/api/photos", files={"file": ("p.jpg", make_page("90"), "image/jpeg")}).json()
-    logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": photo["id"], "text": "I went to the woods"})
+    logged_in.post("/api/entries", json={"source_id": book["id"], "photo_id": photo["id"], "text": "I went to the woods"})
 
     assert logged_in.get("/api/backup/status").json()["copies"] == []
     logged_in.post("/api/backup")
     status = logged_in.get("/api/backup/status").json()
     assert len(status["copies"]) == 1 and status["copies"][0]["bytes"] > 0 and status["kept"] == 14
+    assert status["copies"][0]["file"].endswith(".zip") and status["copies"][0]["kind"] == "daily"
     assert status["photos"]["count"] == 1 and status["covers"]["count"] == 1 and status["database_bytes"] > 0
     assert status["next"] > status["copies"][0]["written_at"][:10]
 
@@ -545,8 +531,8 @@ def test_backup_status_and_everything_as_a_zip(logged_in, settings, monkeypatch)
     assert "attachment" in r.headers["content-disposition"]
     z = zipfile.ZipFile(io.BytesIO(r.content))
     names = z.namelist()
-    assert names[0] == "marginote.db" and any(n.startswith("photos/Walden") for n in names) and "covers/1.jpg" in names
+    assert names[0] == "marginote.db" and any(n.startswith("photos/Walden") for n in names) and "covers/1.webp" in names
     restored = settings.data_dir / "restored.db"
     restored.write_bytes(z.read("marginote.db"))
-    assert sqlite3.connect(restored).execute("SELECT title FROM books").fetchall() == [("Walden",)]
+    assert sqlite3.connect(restored).execute("SELECT title FROM sources").fetchall() == [("Walden",)]
     assert not list(settings.data_dir.glob(".download-*"))     # the temporary copy is gone

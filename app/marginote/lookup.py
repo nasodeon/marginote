@@ -11,13 +11,24 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 
-import httpx
 from PIL import Image
 
 log = logging.getLogger("marginote")
 
-HEADERS = {"User-Agent": "Marginote/0.1 (self-hosted personal reading notes)"}
-TIMEOUT = httpx.Timeout(8.0, connect=5.0)
+
+class _LoadWhenUsed:
+    """Stands for the httpx module until a lookup actually happens: importing it takes about 15 MB of
+    memory, which an app that is mostly idle should not pay up front."""
+
+    def __getattr__(self, name):
+        import httpx as module
+        globals()["httpx"] = module
+        return getattr(module, name)
+
+
+httpx = _LoadWhenUsed()
+
+HEADERS = {"User-Agent": "Marginote/0.5 (self-hosted personal reading notes)"}
 MIN_COVER_BYTES = 2000  # Open Library sometimes answers with a 1x1 placeholder
 MAX_COVER_BYTES = 10 * 1024 * 1024
 
@@ -40,8 +51,8 @@ def _year(text: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _client() -> httpx.Client:
-    return httpx.Client(headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
+def _client():
+    return httpx.Client(headers=HEADERS, timeout=httpx.Timeout(8.0, connect=5.0), follow_redirects=True)
 
 
 class LookupUnavailable(Exception):
@@ -228,7 +239,7 @@ def plausible_cover(data: bytes) -> bool:
     return width >= 80 and height >= 100 and 0.4 <= width / height <= 1.15
 
 
-def _get_image(client: httpx.Client, url: str) -> tuple[bytes | None, str]:
+def _get_image(client, url: str) -> tuple[bytes | None, str]:
     """Download an image. Returns (image or None, what happened, for the log)."""
     try:
         with client.stream("GET", url) as r:
@@ -266,7 +277,7 @@ def find_cover(isbn: str | None, title: str | None, authors: str | None) -> byte
     plain = _plain_title(title) if title else None
     tried: list[str] = []
 
-    def google(client: httpx.Client, query: str, label: str) -> bytes | None:
+    def google(client, query: str, label: str) -> bytes | None:
         try:
             r = client.get("https://www.googleapis.com/books/v1/volumes",
                            params={"q": query, "maxResults": 5, "printType": "books"})

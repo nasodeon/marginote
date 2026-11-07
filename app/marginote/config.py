@@ -20,9 +20,10 @@ class Settings:
     lookups_enabled: bool
     cookie_secure: bool
     backup_hour: int
-    backups_kept: int
+    backups_kept: int                  # daily copies
     unused_photo_hours: int = 24
     straighten_pages: bool = True
+    backups_monthly: int = 6           # plus the first copy of each of the last 6 months
 
     @property
     def db_path(self) -> Path:
@@ -60,4 +61,5 @@ def load_settings() -> Settings:
         backups_kept=int(os.environ.get("BACKUPS_KEPT", "14")),
         unused_photo_hours=int(os.environ.get("UNUSED_PHOTO_HOURS", "24")),
         straighten_pages=_bool(os.environ.get("STRAIGHTEN_PAGES"), True),
+        backups_monthly=int(os.environ.get("BACKUPS_MONTHLY", "6")),
     )

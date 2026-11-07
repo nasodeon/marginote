@@ -1,5 +1,7 @@
 """Photo handling and text recognition (Tesseract), page-number detection and passage selection."""
 
+import ctypes
+import importlib.util
 import io
 import os
 import re
@@ -9,22 +11,38 @@ from dataclasses import asdict, dataclass
 os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
 import pytesseract
-from PIL import Image, ImageFilter, ImageMath, ImageOps
+from PIL import Image, ImageFilter, ImageMath, ImageOps, UnidentifiedImageError
 
 from . import dewarp
 from .lookup import clean_isbn, isbn13
 
-try:  # reads the barcode on a back cover (the ISBN as an EAN-13)
-    import zxingcpp
-except ImportError:  # pragma: no cover
-    zxingcpp = None
+# The barcode reader and the HEIC decoder are loaded the first time they are needed, not at start:
+# most of the time the app waits, and they would hold memory for nothing.
+BARCODE_READER = importlib.util.find_spec("zxingcpp") is not None
 
-try:  # iPhone photos are often HEIC
-    from pillow_heif import register_heif_opener
 
+_trim = None
+
+
+def release_memory() -> None:
+    """Give the memory used to read a page back to the system now (otherwise it stays held for later)."""
+    global _trim
+    if _trim is None:
+        try:
+            _trim = ctypes.CDLL("libc.so.6").malloc_trim
+        except (OSError, AttributeError):  # not glibc
+            _trim = False
+    if _trim:
+        _trim(0)
+
+
+def _open_heic_too() -> bool:
+    try:  # iPhone photos sent as they are (not shrunk by the app) are often HEIC
+        from pillow_heif import register_heif_opener
+    except ImportError:  # pragma: no cover
+        return False
     register_heif_opener()
-except ImportError:  # pragma: no cover
-    pass
+    return True
 
 MAX_SIDE = 2400  # long edge after resizing: sharp enough for OCR, ~0.5 MB as JPEG
 
@@ -41,9 +59,18 @@ class Word:
     line: int     # running line number, shared by words on the same line
 
 
+def open_image(data: bytes) -> Image.Image:
+    try:
+        return Image.open(io.BytesIO(data))
+    except UnidentifiedImageError:
+        if not _open_heic_too():
+            raise
+        return Image.open(io.BytesIO(data))
+
+
 def normalize_photo(data: bytes) -> Image.Image:
     """Open any phone photo, apply its rotation and shrink it (long edge 2400 px)."""
-    img = Image.open(io.BytesIO(data))
+    img = open_image(data)
     if img.format == "JPEG":
         # decode big photos at half or quarter size directly: less memory, faster
         scale = MAX_SIDE / max(img.size)
@@ -69,12 +96,16 @@ def to_stored(img: Image.Image) -> bytes:
     return out.getvalue()
 
 
+COVER_SUFFIX = ".webp"
+
+
 def normalize_cover(data: bytes, max_side: int = 600) -> bytes:
-    img = Image.open(io.BytesIO(data))
+    """A cover or a video thumbnail as kept: at most 600 px, WebP, no metadata (about 30 KB)."""
+    img = open_image(data)
     img = ImageOps.exif_transpose(img).convert("RGB")
     img.thumbnail((max_side, max_side))
     out = io.BytesIO()
-    img.save(out, format="JPEG", quality=85, optimize=True)
+    img.save(out, format="WEBP", quality=80, method=4)
     return out.getvalue()
 
 
@@ -89,10 +120,16 @@ def even_lighting(gray: Image.Image) -> Image.Image:
     small = gray.resize((max(1, w // 8), max(1, h // 8)), Image.Resampling.BOX)
     paper = small.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(2))
     paper = paper.resize((w, h), Image.Resampling.BILINEAR)
-    return ImageMath.lambda_eval(
-        lambda m: m["convert"](m["min"](m["float"](m["g"]) * 255 / (m["float"](m["p"]) + 1), 255), "L"),
-        g=gray, p=paper,
-    )
+    # Worked out in bands of 256 rows: the arithmetic needs several full-size copies in floating point
+    # (4 bytes a pixel), about 100 MB for a whole page at once, under 10 MB a band. Same result.
+    out = Image.new("L", (w, h))
+    for top in range(0, h, 256):
+        box = (0, top, w, min(h, top + 256))
+        out.paste(ImageMath.lambda_eval(
+            lambda m: m["convert"](m["min"](m["float"](m["g"]) * 255 / (m["float"](m["p"]) + 1), 255), "L"),
+            g=gray.crop(box), p=paper.crop(box),
+        ), box)
+    return out
 
 
 @dataclass
@@ -156,6 +193,11 @@ def _read_words(gray: Image.Image, langs: str) -> list[Word]:
 
 def words_to_dicts(words: list[Word]) -> list[dict]:
     return [asdict(w) for w in words]
+
+
+def words_for_browser(words: list[Word]) -> list[dict]:
+    """What the selection screen needs (no confidence): position, text and line of each word."""
+    return [{"i": w.i, "text": w.text, "x": w.x, "y": w.y, "w": w.w, "h": w.h, "line": w.line} for w in words]
 
 
 def words_from_dicts(items: list[dict]) -> list[Word]:
@@ -347,7 +389,8 @@ def find_isbn(img: Image.Image, langs: str) -> tuple[str | None, str]:
 
     Returns (ISBN-13 or None, "barcode" | "text" | "").
     """
-    if zxingcpp is not None:
+    if BARCODE_READER:
+        import zxingcpp
         for result in zxingcpp.read_barcodes(img, formats=zxingcpp.BarcodeFormat.EAN13):
             code = clean_isbn(result.text)
             if code and code.startswith(("978", "979")):

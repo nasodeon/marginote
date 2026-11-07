@@ -13,6 +13,7 @@ import ctypes
 import ctypes.util
 import io
 import logging
+import re
 
 from PIL import Image
 
@@ -47,7 +48,7 @@ def _load():
 def _setup(lib):
     lib.setMsgSeverity.argtypes = [ctypes.c_int]
     lib.setMsgSeverity.restype = ctypes.c_int
-    lib.pixReadMem.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+    lib.pixReadMem.argtypes = [_P, ctypes.c_size_t]
     lib.pixReadMem.restype = _P
     lib.pixWriteMem.argtypes = [ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
                                 ctypes.POINTER(ctypes.c_size_t), _P, ctypes.c_int]
@@ -85,11 +86,22 @@ def available() -> bool:
     return _lib is not None
 
 
+# Images go to Leptonica and back as PNM in memory, read in place rather than copied: a colour page is
+# 13 MB, and every extra copy would count at the moment the app needs the most memory.
+
 def _to_pix(img: Image.Image) -> _P:
     buf = io.BytesIO()
     img.save(buf, format="PPM")  # PGM for a grey image, PPM for colour
-    data = buf.getvalue()
-    return _P(_lib.pixReadMem(data, len(data)))
+    view = buf.getbuffer()
+    arr = (ctypes.c_ubyte * len(view)).from_buffer(view)
+    try:
+        return _P(_lib.pixReadMem(ctypes.addressof(arr), len(view)))
+    finally:
+        del arr
+        view.release()
+
+
+_PNM_HEADER = re.compile(rb"(P[56])\s+(\d+)\s+(\d+)\s+255\s")
 
 
 def _from_pix(pix: _P, mode: str) -> Image.Image | None:
@@ -98,11 +110,18 @@ def _from_pix(pix: _P, mode: str) -> Image.Image | None:
     if _lib.pixWriteMem(ctypes.byref(out), ctypes.byref(size), pix, _IFF_PNM) != 0 or not out:
         return None
     try:
-        img = Image.open(io.BytesIO(ctypes.string_at(out, size.value)))
-        img.load()
+        data = memoryview((ctypes.c_ubyte * size.value).from_address(ctypes.addressof(out.contents))).cast("B")
+        m = _PNM_HEADER.match(bytes(data[:64]))
+        if m is None:
+            img = Image.open(io.BytesIO(bytes(data)))
+            img.load()
+        else:
+            kind = "L" if m.group(1) == b"P5" else "RGB"
+            img = Image.frombuffer(kind, (int(m.group(2)), int(m.group(3))), data[m.end():], "raw", kind, 0, 1).copy()
+        del data
     finally:
         _lib.lept_free(ctypes.cast(out, _P))
-    return img.convert(mode)
+    return img if img.mode == mode else img.convert(mode)
 
 
 def straighten(gray: Image.Image, color: Image.Image) -> tuple[Image.Image, Image.Image] | None:
@@ -124,12 +143,15 @@ def straighten(gray: Image.Image, color: Image.Image) -> tuple[Image.Image, Imag
         _lib.dewarpaSetCurvatures(dewa, *_CURVATURE_LIMITS)
         if _lib.dewarpSinglePageRun(pixs, pixb, dewa, ctypes.byref(pixd), 0) != 0 or not pixd:
             return None
+        flat_gray = _from_pix(pixd, "L")
+        for pix in (pixs, pixb, pixd):   # no longer needed: freed before the colour copy is made
+            _lib.pixDestroy(ctypes.byref(pix))
         pixc = _to_pix(color)
         # page 0, fill uncovered edges from the nearest pixels, no offset, no debug file
         if not pixc or _lib.dewarpaApplyDisparity(dewa, 0, pixc, -1, 0, 0, ctypes.byref(pixcd), None) != 0 \
                 or not pixcd:
             return None
-        flat_gray = _from_pix(pixd, "L")
+        _lib.pixDestroy(ctypes.byref(pixc))
         flat_color = _from_pix(pixcd, "RGB")
         if flat_gray is None or flat_color is None or flat_gray.size != gray.size \
                 or flat_color.size != color.size:
