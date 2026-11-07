@@ -35,11 +35,8 @@ class Word:
     line: int     # running line number, shared by words on the same line
 
 
-def normalize_photo(data: bytes) -> tuple[Image.Image, bytes]:
-    """Open any phone photo, apply its rotation, shrink it, and return it plus a JPEG copy to store.
-
-    The stored copy carries no metadata: location, camera and date tags are dropped.
-    """
+def normalize_photo(data: bytes) -> Image.Image:
+    """Open any phone photo, apply its rotation and shrink it (long edge 2400 px)."""
     img = Image.open(io.BytesIO(data))
     if img.format == "JPEG":
         # decode big photos at half or quarter size directly: less memory, faster
@@ -49,13 +46,20 @@ def normalize_photo(data: bytes) -> tuple[Image.Image, bytes]:
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
     img.thumbnail((MAX_SIDE, MAX_SIDE))
-    return img, to_jpeg(img)
+    return img
 
 
-def to_jpeg(img: Image.Image) -> bytes:
-    """The copy that is stored: JPEG, no metadata."""
+PHOTO_SUFFIX = ".webp"
+
+
+def to_stored(img: Image.Image) -> bytes:
+    """The copy that is kept: WebP, no metadata (no location, camera or date).
+
+    Measured on page photos: about half the size of a JPEG of the same quality (200-340 KB instead of
+    480-660 KB), for about 0.2 s more work.
+    """
     out = io.BytesIO()
-    img.save(out, format="JPEG", quality=85, optimize=True)
+    img.save(out, format="WEBP", quality=80, method=2)
     return out.getvalue()
 
 

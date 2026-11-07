@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import mimetypes
 import re
 import sqlite3
 import threading
@@ -22,7 +23,8 @@ from typing import Literal
 
 import pytesseract
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -30,7 +32,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import backup, db, dewarp, lookup, ocr
 from .config import Settings, load_settings
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 MAX_UPLOAD = 30 * 1024 * 1024
 BAD_IMAGE = (UnidentifiedImageError, OSError, Image.DecompressionBombError)
 # One page at a time: keeps memory predictable (about 270 MB at most) even if several photos arrive at once.
@@ -39,6 +41,37 @@ PHOTO_CACHE = {"Cache-Control": "private, max-age=31536000, immutable"}  # a pho
 COVER_CACHE = {"Cache-Control": "private, no-cache"}  # a cover can be replaced: revalidate
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("marginote")
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+
+# The page may load only its own files and talk only to this server: no outside scripts, fonts or trackers.
+PAGE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Content-Security-Policy": (
+        "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; "
+        "font-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; "
+        "frame-ancestors 'none'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+class StaticAssets(StaticFiles):
+    """The app's own files (script, styles, fonts, icons). Cached a day; a new version gets a new address."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "public, max-age=86400"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
+def page_html() -> str:
+    """The app page, with its script and styles addressed by a fingerprint of their content."""
+    digest = hashlib.sha256()
+    for name in ("app.js", "app.css"):
+        digest.update((STATIC / name).read_bytes())
+    return (STATIC / "index.html").read_text(encoding="utf-8").replace("{{version}}", digest.hexdigest()[:12])
 
 
 # ---------- request bodies ----------
@@ -177,9 +210,12 @@ def book_folder(book_id: int, title: str) -> str:
     return f"{name} ({book_id})"
 
 
-def photo_file_name(photo_id: str, page: str | None) -> str:
+def photo_file_name(photo_id: str, page: str | None, suffix: str = ".jpg") -> str:
     page_part = re.sub(r"[^0-9A-Za-z]", "", page or "")[:10]
-    return f"p{page_part} - {photo_id[:8]}.jpg" if page_part else f"{photo_id[:8]}.jpg"
+    return f"p{page_part} - {photo_id[:8]}{suffix}" if page_part else f"{photo_id[:8]}{suffix}"
+
+
+PHOTO_TYPES = {".webp": "image/webp", ".jpg": "image/jpeg"}
 
 
 def is_unfiled(path: str) -> bool:
@@ -296,7 +332,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not row or not is_unfiled(row["path"]):
             return
         title = conn.execute("SELECT title FROM books WHERE id = ?", (book_id,)).fetchone()["title"]
-        new_rel = f"{book_folder(book_id, title)}/{photo_file_name(photo_id, page)}"
+        new_rel = f"{book_folder(book_id, title)}/{photo_file_name(photo_id, page, Path(row['path']).suffix)}"
         src, dst = settings.photos_dir / row["path"], settings.photos_dir / new_rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.is_file():
@@ -594,7 +630,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return photo_dict(existing)
         with OCR_SLOT:
             try:
-                img, jpeg = ocr.normalize_photo(data)
+                img = ocr.normalize_photo(data)
             except BAD_IMAGE:
                 raise HTTPException(415, "This file is not an image the app can read")
             try:
@@ -602,16 +638,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except pytesseract.TesseractError:
                 log.exception("Tesseract failed")
                 raise HTTPException(500, "Text recognition failed on this photo; try taking it again")
-            if reading.straightened:  # keep the straightened photo: word positions refer to it
-                jpeg = ocr.to_jpeg(reading.photo)
+            # keep the straightened photo when there is one: word positions refer to it
+            stored = ocr.to_stored(reading.photo)
             words, page = reading.words, reading.page
             width, height = img.width, img.height
             del img, reading
         photo_id = uuid.uuid4().hex
-        rel = Path(INBOX) / f"{photo_id}.jpg"
+        rel = Path(INBOX) / f"{photo_id}{ocr.PHOTO_SUFFIX}"
         target = settings.photos_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(jpeg)
+        target.write_bytes(stored)
         conn.execute(
             "INSERT INTO photos (id, path, width, height, sha256, ocr_json, detected_page, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -630,7 +666,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         path = settings.photos_dir / load_photo(conn, photo_id)["path"]
         if not path.is_file():
             raise HTTPException(404, "The photo file is missing from the photos folder")
-        return FileResponse(path, media_type="image/jpeg", headers=PHOTO_CACHE)
+        return FileResponse(path, media_type=PHOTO_TYPES.get(path.suffix, "image/jpeg"), headers=PHOTO_CACHE)
 
     @app.post("/api/photos/{photo_id}/select", tags=["photos"], dependencies=auth)
     def select_words(photo_id: str, body: SelectIn, conn: sqlite3.Connection = Depends(get_db)):
@@ -782,7 +818,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return []
         sql = (
             f"SELECT e.*, b.title AS book_title, {db.TAG_LIST_SQL}, "
-            "snippet(entries_fts, -1, '[', ']', '…', 16) AS snippet "
+            "snippet(entries_fts, -1, char(2), char(3), '…', 16) AS snippet "
             "FROM entries_fts JOIN entries e ON e.id = entries_fts.rowid JOIN books b ON b.id = e.book_id "
             "WHERE entries_fts MATCH ?"
         )
@@ -803,8 +839,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         path = backup.snapshot(settings.db_path, settings.backups_dir, settings.backups_kept)
         return {"file": path.name}
 
+    app.mount("/static", StaticAssets(directory=STATIC), name="static")
+    page = page_html()
+
     @app.get("/", include_in_schema=False)
-    def test_page():
-        return FileResponse(STATIC / "index.html", media_type="text/html")
+    def app_page():
+        return HTMLResponse(page, headers=PAGE_HEADERS)
 
     return app

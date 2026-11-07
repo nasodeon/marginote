@@ -82,7 +82,9 @@ def now() -> str:
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, timeout=10)
+    # Each request gets its own connection, but the web framework may open it in one worker thread and
+    # close it in another: allowed here, since a connection is never used by two requests at once.
+    conn = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

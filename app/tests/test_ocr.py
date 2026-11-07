@@ -31,8 +31,9 @@ def test_page_sort_keys():
 
 
 def test_real_ocr_reads_text_page_number_and_selection():
-    img, jpeg = ocr.normalize_photo(make_page("168"))
-    assert jpeg[:2] == b"\xff\xd8"
+    img = ocr.normalize_photo(make_page("168"))
+    stored = ocr.to_stored(img)
+    assert stored[:4] == b"RIFF" and stored[8:12] == b"WEBP"
     words = ocr.recognize(img, "fra+eng")
     texts = [x.text for x in words]
     assert len(words) > 40
@@ -49,7 +50,7 @@ def test_real_ocr_reads_text_page_number_and_selection():
 
 
 def test_page_number_not_confused_with_numbers_in_text():
-    img, _ = ocr.normalize_photo(make_page("27"))
+    img = ocr.normalize_photo(make_page("27"))
     words = ocr.recognize(img, "fra+eng")
     assert ocr.detect_page(words, img.width, img.height) == "27"
 
@@ -104,7 +105,7 @@ needs_leptonica = pytest.mark.skipif(not dewarp.available(), reason="Leptonica l
 @needs_leptonica
 def test_curved_page_is_straightened_before_reading():
     page, written = make_full_page("6")
-    img, _ = ocr.normalize_photo(as_jpeg(bend_toward_spine(page)))
+    img = ocr.normalize_photo(as_jpeg(bend_toward_spine(page)))
 
     as_is = ocr.read_page(img, "fra+eng", straighten=False)
     flat = ocr.read_page(img, "fra+eng")
@@ -121,14 +122,14 @@ def test_curved_page_is_straightened_before_reading():
 @needs_leptonica
 def test_flat_page_is_read_unchanged():
     page, written = make_full_page("6")
-    img, _ = ocr.normalize_photo(as_jpeg(page))
+    img = ocr.normalize_photo(as_jpeg(page))
     plain = ocr.read_page(img, "fra+eng", straighten=False)
     flat = ocr.read_page(img, "fra+eng")
     assert word_recall([w.text for w in flat.words], written) >= word_recall([w.text for w in plain.words], written) - 0.02
 
 
 def test_short_page_without_enough_lines_is_kept_as_photographed():
-    img, _ = ocr.normalize_photo(make_page("168"))
+    img = ocr.normalize_photo(make_page("168"))
     reading = ocr.read_page(img, "fra+eng")
     assert not reading.straightened and reading.photo is img and reading.page == "168"
 
@@ -137,7 +138,7 @@ def test_reading_still_works_without_leptonica(monkeypatch):
     monkeypatch.setattr(dewarp, "_lib", None)
     assert not dewarp.available()
     page, written = make_full_page("6")
-    reading = ocr.read_page(ocr.normalize_photo(as_jpeg(page))[0], "fra+eng")
+    reading = ocr.read_page(ocr.normalize_photo(as_jpeg(page)), "fra+eng")
     assert not reading.straightened
     assert word_recall([w.text for w in reading.words], written) > 0.85
 

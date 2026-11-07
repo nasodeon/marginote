@@ -6,9 +6,12 @@ through your private Tailscale network.
 
 ## What is here
 
-- `app/` — the backend: FastAPI, SQLite full-text search, Tesseract text recognition (French and English)
+- `app/` — the app: FastAPI, SQLite full-text search, Tesseract text recognition (French and English)
   with shadow removal and straightening of pages that curve toward the spine (Leptonica), page-number
   detection, book details and covers from Open Library (Google Books as fallback)
+- `app/marginote/static/` — the screens, for phone and computer: books, a page per book (cover beside the
+  title), all quotes with filters, tags, and the capture flow (book → photo → passage → note and tags).
+  Plain JavaScript; fonts (IBM Plex, SIL Open Font License) are served by the app itself
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
@@ -20,19 +23,33 @@ through your private Tailscale network.
 2. Create two folders on your server: `.../marginote/data` and `.../marginote/tailscale`.
 3. Paste `docker-compose.yml` into your Docker app, replace the values marked `CHANGE-ME` (and the
    folder paths if yours differ), and deploy.
-4. Open `https://marginote.<your-tailnet>.ts.net` from a device on your tailnet.
+4. Open `https://marginote.<your-tailnet>.ts.net` from a device on your tailnet. On iPhone, Safari's
+   Share → Add to Home Screen opens it like an app.
 
-The first page is a plain test page; `/docs` lists every API call.
+`/docs` lists every API call.
 
 ## Update
 
-Pull the new image and recreate the `marginote` container (the compose file sets `pull_policy: always`).
-The data folder is never touched.
+Stop the project and deploy it again: the compose file sets `pull_policy: always`, so the newest image is
+downloaded. The data folder is never touched.
+
+Do not use a one-click "update" or "recreate" button on the `marginote` container (UGOS, Portainer…): it
+shares the Tailscale container's network, and those buttons cannot rebuild such a container (Docker
+answers "conflicting options: hostname and the network mode"), which leaves it deleted.
+
+## Disk space
+
+- Each update leaves the previous image on disk, unused (a few hundred MB each time). Delete unused images
+  in your Docker app now and then; nothing of yours is in them.
+- Page photos are stored as WebP: about 200-350 KB each, half the size of a JPEG of the same quality.
+  Photos no quote uses are deleted after a day.
+- The database holds only text: a few MB even for thousands of quotes; 14 nightly copies are kept.
 
 ## Data
 
-Everything lives in the data folder: `marginote.db` (books, quotes, tags), `photos/` (page photos),
-`covers/`, and `backups/` (a database snapshot every night at 03:00, last 14 kept).
+Everything lives in the data folder: `marginote.db` (books, quotes, tags), `photos/` (page photos, one
+folder per book, named after the page: `p168 - 1a2b3c4d.webp`), `covers/`, and `backups/` (a database
+snapshot every night at 03:00, last 14 kept).
 
 When a page was curved, the photo kept is the straightened one, since the word positions used to
 select a passage refer to it.
@@ -58,6 +75,8 @@ Set in the compose file's `environment` list; all optional.
 - Page photos are stored without any metadata (no location, camera or date). The test page also
   shrinks photos on the phone before sending them.
 - No access log: your searches and the pages you open are not written to the Docker logs.
+- The app's pages load nothing from outside (no web fonts, scripts or trackers from other sites); a
+  Content-Security-Policy header enforces it. Only `/docs` loads its viewer from a public CDN.
 - The password lives only in your compose file; it is never written to the database. Changing it
   logs every device out.
 

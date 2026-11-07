@@ -1,4 +1,5 @@
 import io
+import re
 
 from conftest import make_page
 from PIL import Image
@@ -26,8 +27,16 @@ def test_everything_else_needs_login(client):
     assert client.get("/api/me").json() == {"logged_in": False}
 
 
-def test_test_page_and_docs_are_served(client):
-    assert "backend test" in client.get("/").text
+def test_app_page_files_and_docs_are_served(client):
+    page = client.get("/")
+    assert page.status_code == 200 and "<title>Marginote</title>" in page.text
+    assert "default-src 'self'" in page.headers["content-security-policy"]   # nothing loaded from outside
+    assert "{{version}}" not in page.text
+    for path in re.findall(r'(?:href|src)="(/static/[^"?]+)', page.text):
+        assert client.get(path).status_code == 200, path                      # every file the page names exists
+    assert client.get("/static/app.js").headers["content-type"].startswith(("text/javascript", "application/javascript"))
+    assert client.get("/static/fonts/ibm-plex-sans-latin-400-normal.woff2").status_code == 200
+    assert client.get("/static/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
     assert client.get("/docs").status_code == 200
 
 
@@ -87,7 +96,8 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     assert quote["page"] == "168" and quote["text"] == preview["text"]
     assert quote["tags"] == ["méthode", "épistémologie"]
     assert logged_in.get(quote["photo_url"]).status_code == 200
-    assert (settings.photos_dir).rglob("*.jpg")
+    assert next(settings.photos_dir.rglob("*.webp"))
+    assert logged_in.get(quote["photo_url"]).headers["content-type"] == "image/webp"
 
     thought = logged_in.post("/api/entries", json={
         "book_id": book["id"], "kind": "thought", "text": "Comparer avec Duhem et sa mémoire des hypothèses.",
@@ -168,7 +178,7 @@ def test_photo_metadata_is_removed_and_rotation_applied(logged_in, settings):
     photo = logged_in.post("/api/photos", files={"file": ("IMG_0002.JPG", out.getvalue(), "image/jpeg")}).json()
     assert photo["height"] > photo["width"]          # upright again
     assert photo["detected_page"] == "168"           # and readable
-    stored_path = next(settings.photos_dir.rglob(f"{photo['id']}.jpg"))
+    stored_path = next(settings.photos_dir.rglob(f"{photo['id']}.webp"))
     assert len(Image.open(stored_path).getexif()) == 0     # no camera, date or location left
     assert b"PhoneMaker" not in stored_path.read_bytes()
 
@@ -203,7 +213,7 @@ def test_photos_are_cached_and_missing_files_give_404(logged_in, settings, monke
     photo = logged_in.post("/api/photos", files={"file": ("p.jpg", make_page("9"), "image/jpeg")}).json()
     r = logged_in.get(photo["image_url"])
     assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
-    next(settings.photos_dir.rglob(f"{photo['id']}.jpg")).unlink()
+    next(settings.photos_dir.rglob(f"{photo['id']}.webp")).unlink()
     assert logged_in.get(photo["image_url"]).status_code == 404
     book = logged_in.post("/api/books", json={"title": "Sans couverture"}).json()
     assert logged_in.get(f"/api/books/{book['id']}/cover").status_code == 404
@@ -223,14 +233,14 @@ def test_photos_wait_in_the_inbox_then_move_to_their_book(logged_in, settings, m
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
     book = logged_in.post("/api/books", json={"title": "La Science et l’hypothèse : essai"}).json()
     photo = logged_in.post("/api/photos", files={"file": ("p.jpg", make_page("168"), "image/jpeg")}).json()
-    assert _photo_path(settings, photo["id"]) == f"inbox/{photo['id']}.jpg"
+    assert _photo_path(settings, photo["id"]) == f"inbox/{photo['id']}.webp"
 
     logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": photo["id"], "text": "On fait la science"})
     filed = _photo_path(settings, photo["id"])
     folder = f"La Science et l’hypothèse essai ({book['id']})"     # ':' removed, Windows-safe
-    assert filed == f"{folder}/p168 - {photo['id'][:8]}.jpg"
+    assert filed == f"{folder}/p168 - {photo['id'][:8]}.webp"
     assert (settings.photos_dir / filed).is_file()
-    assert not (settings.photos_dir / "inbox" / f"{photo['id']}.jpg").exists()
+    assert not (settings.photos_dir / "inbox" / f"{photo['id']}.webp").exists()
     assert logged_in.get(photo["image_url"]).status_code == 200
 
     # renaming the book renames its folder
@@ -306,7 +316,7 @@ def test_curved_page_is_stored_straightened_and_words_match_it(logged_in, settin
     assert word_recall([w["text"] for w in photo["words"]], written) > 0.85
     stored = logged_in.get(photo["image_url"]).content
     assert Image.open(io.BytesIO(stored)).size == (photo["width"], photo["height"])
-    assert stored != ocr.normalize_photo(upload)[1]          # the straightened copy was kept
+    assert stored != ocr.to_stored(ocr.normalize_photo(upload))          # the straightened copy was kept
 
     # with STRAIGHTEN_PAGES=false the photo is kept exactly as sent (shrunk, without metadata)
     plain_settings = dataclasses.replace(settings, straighten_pages=False)
@@ -314,5 +324,27 @@ def test_curved_page_is_stored_straightened_and_words_match_it(logged_in, settin
         plain.post("/api/login", json={"password": "correct horse"})
         other = upload[:-2] + b"\x00" + upload[-2:]          # a different file, so not seen as a duplicate
         photo = plain.post("/api/photos", files={"file": ("curved2.jpg", other, "image/jpeg")}).json()
-        assert plain.get(photo["image_url"]).content == ocr.normalize_photo(other)[1]
+        assert plain.get(photo["image_url"]).content == ocr.to_stored(ocr.normalize_photo(other))
         assert plain.get("/api/health").json()["straighten_pages"] is False
+
+
+def test_search_marks_matches_without_clashing_with_brackets(logged_in, monkeypatch):
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "Essai", "fetch_cover": False}).json()
+    logged_in.post("/api/entries", json={"book_id": book["id"], "text": "Une [comparaison] devient une image."})
+    hit = logged_in.get("/api/search", params={"q": "image"}).json()[0]
+    assert "\u0002image\u0003" in hit["snippet"] and "[comparaison]" in hit["snippet"]
+
+
+def test_many_requests_at_once_all_succeed(logged_in, monkeypatch):
+    """The database connection of a request may be closed by another worker thread."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "Pensées", "fetch_cover": False}).json()
+    def add(n):
+        return logged_in.post("/api/entries", json={"book_id": book["id"], "text": f"Pensée {n}"}).status_code
+    with ThreadPoolExecutor(8) as pool:
+        codes = list(pool.map(add, range(40)))
+    assert codes == [201] * 40
+    assert len(logged_in.get(f"/api/books/{book['id']}/entries").json()) == 40
