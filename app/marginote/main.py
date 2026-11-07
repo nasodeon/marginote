@@ -24,7 +24,7 @@ from . import backup, db, dewarp, ocr, routes_admin, routes_entries, routes_libr
 from .config import Settings, load_settings
 from .context import Context
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 # the release that gave the database its current shape: names the copy made before upgrading to it
 SHAPE_CHANGED_IN = "0.6.0"
 STATIC = Path(__file__).parent / "static"

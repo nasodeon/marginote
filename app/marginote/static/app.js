@@ -66,31 +66,34 @@ function icon(name, size = 18) {
   return svg;
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
 function fullDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
-  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  return `${d.getDate() === 1 ? '1er' : d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 function dateTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return `${fullDate(iso)}, ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
-function plainDate(value) {   // '2026-10-02' -> '2 Oct 2026', '2026-10' -> 'Oct 2026'
+function plainDate(value) {   // '2026-10-02' -> '2 oct. 2026', '2026-10' -> 'oct. 2026'
   const m = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/.exec(value || '');
   if (!m) return value || '';
-  return [m[3] ? Number(m[3]) : null, m[2] ? MONTHS[Number(m[2]) - 1] : null, m[1]].filter(Boolean).join(' ');
+  return [m[3] ? (Number(m[3]) === 1 ? '1er' : Number(m[3])) : null, m[2] ? MONTHS[Number(m[2]) - 1] : null, m[1]].filter(Boolean).join(' ');
 }
 function size(bytes) {
-  if (!bytes) return '0 KB';
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  if (!bytes) return '0 Ko';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} Ko`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} Mo`;
+  return `${(bytes / 1024 ** 3).toFixed(2).replace('.', ',')} Go`;
 }
 const fold = (s) => (s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
-const WORDS = { entry: 'entries', copy: 'copies', person: 'people', other: 'other', class: 'classes' };
-const plural = (n, word) => `${n} ${n === 1 ? word : WORDS[word] || word + 's'}`;
+// how many of something, in French: 0 and 1 take the singular
+const WORDS = { quote: ['citation', 'citations'], note: ['note', 'notes'], source: ['source', 'sources'], page: ['page', 'pages'],
+  person: ['personne', 'personnes'], work: ['œuvre', 'œuvres'], word: ['mot', 'mots'], entry: ['entrée', 'entrées'],
+  copy: ['copie', 'copies'], translation: ['traduction', 'traductions'] };
+const plural = (n, word) => { const w = WORDS[word] || [word, word + 's']; return `${n} ${n <= 1 ? w[0] : w[1]}`; };
 const isWide = () => window.matchMedia('(min-width: 960px)').matches;
 const coarse = () => window.matchMedia('(pointer: coarse)').matches;
 const shorten = (text, n) => (text && text.length > n ? text.slice(0, n - 1).trimEnd() + '…' : text || '');
@@ -114,14 +117,14 @@ function debounce(fn, ms) {
 // What each kind of source is called, what it is made by, and how to say where in it a passage is.
 // notesFirst: mostly your own notes on it (a video, a class), so capture starts on Note and its page shows them first.
 const KINDS = {
-  book: { name: 'Book', several: 'books', maker: 'author', makerLabel: 'author(s)', publisher: 'publisher', where: 'page', photos: true },
-  ebook: { name: 'Ebook', several: 'ebooks', maker: 'author', makerLabel: 'author(s)', publisher: 'publisher', where: 'page or chapter', photos: true },
-  article: { name: 'Article', several: 'articles', maker: 'author', makerLabel: 'author(s)', publisher: 'site', where: null, link: true, dated: true },
-  video: { name: 'Video', several: 'videos', maker: 'speaker', makerLabel: 'who speaks', publisher: 'channel', where: null, link: true, dated: true, notesFirst: true },
-  podcast: { name: 'Podcast', several: 'podcasts', maker: 'speaker', makerLabel: 'who speaks', publisher: 'show', where: null, link: true, dated: true, notesFirst: true },
-  class: { name: 'Class', several: 'classes', maker: 'speaker', makerLabel: 'teacher(s)', publisher: 'school or university', where: 'session', photos: true, notesFirst: true },
-  talk: { name: 'Talk', several: 'talks', maker: 'speaker', makerLabel: 'who speaks', publisher: 'event or place', where: 'slide or part', photos: true, dated: true },
-  other: { name: 'Other', several: 'other', maker: 'author', makerLabel: 'by', publisher: 'publisher or place', where: 'where', photos: true },
+  book: { name: 'Livre', label: 'livre', several: 'livres', the: 'le livre', this: 'ce livre', maker: 'author', makerLabel: 'auteur(s)', publisher: 'éditeur', where: 'page', photos: true },
+  ebook: { name: 'Livre numérique', label: 'livre numérique', several: 'livres numériques', the: 'le livre', this: 'ce livre numérique', maker: 'author', makerLabel: 'auteur(s)', publisher: 'éditeur', where: 'page ou chapitre', photos: true },
+  article: { name: 'Article', label: 'article', several: 'articles', the: 'l’article', this: 'cet article', maker: 'author', makerLabel: 'auteur(s)', publisher: 'site', where: null, link: true, dated: true },
+  video: { name: 'Vidéo', label: 'vidéo', several: 'vidéos', the: 'la vidéo', this: 'cette vidéo', maker: 'speaker', makerLabel: 'qui parle', publisher: 'chaîne', where: null, link: true, dated: true, notesFirst: true },
+  podcast: { name: 'Podcast', label: 'podcast', several: 'podcasts', the: 'le podcast', this: 'ce podcast', maker: 'speaker', makerLabel: 'qui parle', publisher: 'émission', where: null, link: true, dated: true, notesFirst: true },
+  class: { name: 'Cours', label: 'cours', several: 'cours', the: 'le cours', this: 'ce cours', maker: 'speaker', makerLabel: 'enseignant(s)', publisher: 'école ou université', where: 'séance', photos: true, notesFirst: true },
+  talk: { name: 'Conférence', label: 'conférence', several: 'conférences', the: 'la conférence', this: 'cette conférence', maker: 'speaker', makerLabel: 'qui parle', publisher: 'événement ou lieu', where: 'diapo ou partie', photos: true, dated: true },
+  other: { name: 'Autre', label: 'autre', several: 'autres', the: 'la source', this: 'cette source', maker: 'author', makerLabel: 'par', publisher: 'éditeur ou lieu', where: 'où', photos: true },
 };
 const kindOf = (s) => KINDS[s?.kind] || KINDS.book;
 const makers = (s) => [...(s.people?.author || []), ...(s.people?.speaker || []), ...(s.people?.editor || [])];
@@ -138,7 +141,7 @@ async function api(path, { method = 'GET', body, form } = {}) {
   else if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   let res;
   try { res = await fetch(path, opts); } catch {
-    throw new ApiError(0, 'Cannot reach your server. Is Tailscale on?');
+    throw new ApiError(0, 'Impossible de joindre votre serveur. Tailscale est-il activé ?');
   }
   const data = (res.headers.get('content-type') || '').includes('json') ? await res.json() : await res.text();
   if (res.status === 401 && path !== '/api/login') {
@@ -146,10 +149,10 @@ async function api(path, { method = 'GET', body, form } = {}) {
       sessionStorage.setItem('marginote.after', location.hash);
       location.replace('#/login');
     }
-    throw new ApiError(401, 'Please log in');
+    throw new ApiError(401, 'Veuillez vous connecter');
   }
   if (!res.ok) {
-    let msg = `Something went wrong (${res.status})`;
+    let msg = `Un problème est survenu (${res.status})`;
     if (typeof data?.detail === 'string') msg = data.detail;
     else if (Array.isArray(data?.detail)) msg = data.detail.map((d) => d.msg).join('; ');
     throw new ApiError(res.status, msg);
@@ -228,7 +231,7 @@ function backButton(fallback, fallbackLabel) {
     icon('back', 20), h('span', { class: 'lbl', text: shorten(label, 22) }));
 }
 
-function cancelButton(fallback, text = 'Cancel') {
+function cancelButton(fallback, text = 'Annuler') {
   return h('a', { class: 'link-btn', href: '#/' + fallback, onclick: (ev) => { ev.preventDefault(); nav.back(fallback); } }, text);
 }
 
@@ -256,7 +259,7 @@ function thumb(source, size = 'small') {
 
 function personLinks(list) {
   const out = [];
-  list.forEach((p, k) => { if (k) out.push(k === list.length - 1 ? ' and ' : ', '); out.push(h('a', { class: 'plink', href: `#/person/${p.id}`, text: p.name })); });
+  list.forEach((p, k) => { if (k) out.push(k === list.length - 1 ? ' et ' : ', '); out.push(h('a', { class: 'plink', href: `#/person/${p.id}`, text: p.name })); });
   return out;
 }
 
@@ -267,7 +270,7 @@ function topicLinks(list) {
 function sourceLine(s) {
   // 'book · Frédéric Lordon' / 'video · Philosophie à voix haute' / 'class · Jeanne Dupont · 2026'
   const who = makers(s).map((p) => p.name).join(', ');
-  return joinDots([h('span', { class: 'sc', text: s.kind }), who || s.publisher || null, s.kind === 'class' && s.year ? String(s.year) : null,
+  return joinDots([h('span', { class: 'sc', text: kindOf(s).label }), who || s.publisher || null, s.kind === 'class' && s.year ? String(s.year) : null,
     s.field ? h('i', { text: s.field }) : null]);
 }
 
@@ -292,15 +295,15 @@ function entryMeta(e, { showSource = false, source = null, person = null } = {})
   const bits = [];
   if (!e.source) {
     // words someone said: who (unless on their page) and where or when
-    bits.push(h('span', { class: 'sc ink', text: e.by && e.by.id !== person ? `${surname(e.by)}, said` : 'said' }));
+    bits.push(h('span', { class: 'sc ink', text: e.by && e.by.id !== person ? `paroles de ${surname(e.by)}` : 'paroles' }));
     if (e.page) bits.push(h('i', { text: shorten(e.page, 48) }));
   } else {
     if (showSource) bits.push(h('i', { text: shorten(e.source.title, 48) }));
-    if (e.words_by && e.words_by.id !== person) bits.push(h('span', { class: 'sc ink', text: `${surname(e.words_by)}, quoted` }));
+    if (e.words_by && e.words_by.id !== person) bits.push(h('span', { class: 'sc ink', text: `${surname(e.words_by)}, cité` }));
   }
   const about = e.about.filter((p) => p.id !== person && !(source && p.from_source));
-  if (about.length) bits.push('about ' + about.map((p) => surname(p)).join(', '));
-  if (e.note) bits.push('comment');
+  if (about.length) bits.push('sur ' + about.map((p) => surname(p)).join(', '));
+  if (e.note) bits.push('commentaire');
   const topics = e.topics.filter((t) => !(source && t.from_source));
   if (topics.length) bits.push(h('span', { class: 'tg', text: topics.map((t) => t.name).join(' ') }));
   return joinDots(bits);
@@ -326,25 +329,25 @@ function entryTable(entries, { showSource = true, fresh = null } = {}) {
   const rows = entries.map((e) => h('tr', { class: e.id === fresh ? 'fresh' : '', id: `e${e.id}`, onclick: () => go(`entry/${e.id}`) },
     h('td', { class: 'm', text: e.source ? e.page || '' : '' }),
     h('td', {}, e.snippet ? withMarks(e.snippet) : e.text,
-      e.source && e.words_by ? h('span', { class: 'sub sc', text: `${surname(e.words_by)}, quoted` }) : null,
+      e.source && e.words_by ? h('span', { class: 'sub sc', text: `${surname(e.words_by)}, cité` }) : null,
       e.note ? h('span', { class: 'sub', text: shorten(e.note, 90) }) : null),
-    showSource ? h('td', { class: 'it' }, e.source ? e.source.title : [h('span', { class: 'sc', text: 'said ' }), e.by?.name || '',
+    showSource ? h('td', { class: 'it' }, e.source ? e.source.title : [h('span', { class: 'sc', text: 'paroles de ' }), e.by?.name || '',
       e.page ? `, ${e.page}` : '']) : null,
     h('td', { class: 'tags', text: e.topics.map((t) => t.name).join(' ') }),
     h('td', { class: 'm', text: fullDate(e.created_at) })));
   return h('div', { class: 'table-wrap' },
     h('table', { class: 'grid' },
       h('thead', {}, h('tr', {},
-        h('th', { style: { width: '64px' }, text: 'where' }), h('th', { text: 'quote' }),
+        h('th', { style: { width: '64px' }, text: 'où' }), h('th', { text: 'citation' }),
         showSource ? h('th', { style: { width: '200px' }, text: 'source' }) : null,
-        h('th', { style: { width: '150px' }, text: 'topics' }), h('th', { style: { width: '110px' }, text: 'added' }))),
+        h('th', { style: { width: '150px' }, text: 'thèmes' }), h('th', { style: { width: '110px' }, text: 'ajoutée' }))),
       h('tbody', {}, rows)));
 }
 
 function entryList(entries, opts = {}) {
   if (!entries.length) return null;
   if (isWide() && !opts.compact) return entryTable(entries, { showSource: opts.showSource, fresh: opts.fresh });
-  return [opts.head === false ? null : h('div', { class: 'colhead' }, h('span', { class: 'w36', text: '' }), h('span', { style: { flex: 1 }, text: opts.head || 'quote' })),
+  return [opts.head === false ? null : h('div', { class: 'colhead' }, h('span', { class: 'w36', text: '' }), h('span', { style: { flex: 1 }, text: opts.head || 'citation' })),
     entries.map((e) => entryRow(e, { ...opts, fresh: e.id === opts.fresh })), h('div', { class: 'list-end' })];
 }
 
@@ -370,7 +373,7 @@ function confirmDialog({ title, text, choices, extra }) {
       h('div', { class: 'choices' },
         choices.map((c) => h('button', { type: 'button', class: `btn ${c.danger ? 'danger primary' : c.primary ? 'primary' : ''}`,
           onclick: () => done(typeof c.value === 'function' ? c.value() : c.value) }, c.label)),
-        h('button', { type: 'button', class: 'btn plain', onclick: () => done(null) }, 'Cancel')));
+        h('button', { type: 'button', class: 'btn plain', onclick: () => done(null) }, 'Annuler')));
     dlg.addEventListener('cancel', (ev) => { ev.preventDefault(); done(null); });
     document.body.append(dlg);
     dlg.showModal();
@@ -380,7 +383,7 @@ function confirmDialog({ title, text, choices, extra }) {
 function errorBox(err, retry) {
   return h('div', { class: 'pad' },
     h('div', { class: 'error', role: 'alert', text: err.message || String(err) }),
-    retry ? h('button', { class: 'btn', type: 'button', onclick: retry }, 'Try again') : null);
+    retry ? h('button', { class: 'btn', type: 'button', onclick: retry }, 'Réessayer') : null);
 }
 
 function sectionHead(number, title, count) {
@@ -395,14 +398,14 @@ function moreGroup(entries, first, rowOpts) {
   const rest = entries.slice(first);
   put(wrap, shown.map((e) => entryRow(e, rowOpts)),
     rest.length ? h('button', { class: 'more-btn', type: 'button', onclick: () => put(wrap, entries.map((e) => entryRow(e, rowOpts))) },
-      `${rest.length} more ›`) : null);
+      `${rest.length} de plus ›`) : null);
   return wrap;
 }
 
 // ---------- inputs for people and topics ----------
 // Type a name: people and topics already in the library are offered; Enter (or the last line) adds a new one.
 
-function chipInput({ label, initial = [], options, single = false, placeholder = 'add', newLabel, tt = false, id, quick = 0, onchange, allowNew = true, chipClass = null }) {
+function chipInput({ label, initial = [], options, single = false, placeholder = 'ajouter', newLabel, tt = false, id, quick = 0, onchange, allowNew = true, chipClass = null }) {
   let items = [...initial];
   let active = -1;
   let shown = [];
@@ -439,7 +442,7 @@ function chipInput({ label, initial = [], options, single = false, placeholder =
         onpointerdown: (ev) => ev.preventDefault(), onclick: () => add(o) }, h('span', { class: tt ? 'tt' : '', text: o.label }),
       o.sub ? h('span', { class: 'muted', text: o.sub }) : null)),
       exists || !allowNew ? null : h('button', { type: 'button', class: 'new', onpointerdown: (ev) => ev.preventDefault(), onclick: addTyped },
-        `+ ${newLabel} “${input.value.trim()}”`));
+        `+ ${newLabel} « ${input.value.trim()} »`));
     list.hidden = false;
     input.setAttribute('aria-expanded', 'true');
   }
@@ -451,7 +454,7 @@ function chipInput({ label, initial = [], options, single = false, placeholder =
   }
   function draw() {
     put(box, items.map((i) => h('span', { class: `chip ${chipClass || (tt ? '' : 'person')}` }, i.label,
-      h('button', { type: 'button', 'aria-label': `Remove ${i.label}`, onclick: (ev) => {
+      h('button', { type: 'button', 'aria-label': `Retirer ${i.label}`, onclick: (ev) => {
         ev.stopPropagation(); items = items.filter((x) => x !== i); changed(); draw();
       } }, '×'))), single && items.length ? null : input);
     drawList();
@@ -491,13 +494,13 @@ const personItem = (p) => ({ key: 'p' + p.id, label: p.name, value: p.id });
 
 function peopleInput(label, initial, allPeople, opts = {}) {
   return chipInput({ label, initial: initial.map(personItem), options: () => allPeople.map(personOption),
-    newLabel: 'new person', placeholder: opts.placeholder || 'type a name', ...opts });
+    newLabel: 'nouvelle personne', placeholder: opts.placeholder || 'tapez un nom', ...opts });
 }
 
 // the books, videos, classes… a note is on: chosen from the library
 function sourcesInput(label, initial, allSources, opts = {}) {
   const item = (src) => ({ key: 's' + src.id, label: src.title, value: src.id });
-  return chipInput({ label, initial: initial.map(item), allowNew: false, placeholder: 'find a source', chipClass: 'source',
+  return chipInput({ label, initial: initial.map(item), allowNew: false, placeholder: 'chercher une source', chipClass: 'source',
     options: () => allSources.map((src) => ({ ...item(src), sub: [src.kind, makers(src).map((p) => p.name).join(', ')].filter(Boolean).join(' · ') })),
     ...opts });
 }
@@ -506,14 +509,14 @@ function topicsInput(label, initial, allTopics, opts = {}) {
   const byUse = [...allTopics].sort((a, b) => b.entries - a.entries);
   return chipInput({ label, tt: true, initial: initial.map((t) => ({ key: 't' + fold(t), label: t, value: t })),
     options: () => byUse.map((t) => ({ key: 't' + fold(t.name), label: t.name, value: t.name, sub: plural(t.entries, 'quote') })),
-    newLabel: 'new topic', placeholder: 'add a topic', quick: 8, ...opts });
+    newLabel: 'nouveau thème', placeholder: 'ajouter un thème', quick: 8, ...opts });
 }
 
 // a passage from the source, or your own note on it
 function modeSwitch(get, set, after) {
-  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Quote or note' });
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Citation ou note' });
   const draw = () => put(seg, ['quote', 'note'].map((k) => h('button', { type: 'button', class: get() === k ? 'on' : '',
-    'aria-pressed': get() === k ? 'true' : 'false', onclick: () => { set(k); draw(); after?.(); } }, k === 'quote' ? 'Quote' : 'Note')));
+    'aria-pressed': get() === k ? 'true' : 'false', onclick: () => { set(k); draw(); after?.(); } }, k === 'quote' ? 'Citation' : 'Note')));
   draw();
   return seg;
 }
@@ -585,22 +588,22 @@ async function viewLogin() {
   } },
   h('h1', {}, 'Marginote'),
   h('input', { type: 'text', name: 'username', value: 'marginote', autocomplete: 'username', hidden: true, 'aria-hidden': 'true' }),
-  h('label', { class: 'field', for: 'pw' }, h('span', { text: 'password' }), pw),
-  h('button', { class: 'btn primary big', type: 'submit' }, 'Log in'), msg);
+  h('label', { class: 'field', for: 'pw' }, h('span', { text: 'mot de passe' }), pw),
+  h('button', { class: 'btn primary big', type: 'submit' }, 'Se connecter'), msg);
   setTimeout(() => pw.focus(), 50);
   return { el: form, bare: true };
 }
 
 // ----- the library: sources, people or topics -----
 
-const LIBRARY_VIEWS = [['sources', 'Sources'], ['people', 'People'], ['topics', 'Topics']];
+const LIBRARY_VIEWS = [['sources', 'Sources'], ['people', 'Personnes'], ['topics', 'Thèmes']];
 
 async function viewLibrary({ params }) {
   let view = params.get('view') || prefs.get('libraryView', 'sources');
   if (!LIBRARY_VIEWS.some(([k]) => k === view)) view = 'sources';
   const [sources, people, topics, inbox] = await Promise.all([store.sources(true), store.people(true), store.topics(true),
     api('/api/photos').catch(() => [])]);
-  const q = h('input', { type: 'search', placeholder: 'Search the library', 'aria-label': 'Search the library', enterkeyhint: 'search' });
+  const q = h('input', { type: 'search', placeholder: 'Chercher dans la bibliothèque', 'aria-label': 'Chercher dans la bibliothèque', enterkeyhint: 'search' });
   const list = h('div', { class: 'library-list' });
   const tools = h('div');
   const counts = { sources: sources.length, people: people.length, topics: topics.length };
@@ -620,11 +623,11 @@ async function viewLibrary({ params }) {
     let medium = prefs.get('libraryMedium', '');
     if (medium && !present.includes(medium)) medium = '';
     let sort = prefs.get('librarySort', 'recent');
-    const sortSel = h('select', { class: 'filter', 'aria-label': 'Order', onchange: () => { prefs.set('librarySort', sortSel.value); draw(); } },
-      h('option', { value: 'recent' }, 'recent first'), h('option', { value: 'title' }, 'by title'), h('option', { value: 'added' }, 'by date added'));
+    const sortSel = h('select', { class: 'filter', 'aria-label': 'Ordre', onchange: () => { prefs.set('librarySort', sortSel.value); draw(); } },
+      h('option', { value: 'recent' }, 'récents d’abord'), h('option', { value: 'title' }, 'par titre'), h('option', { value: 'added' }, 'par date d’ajout'));
     sortSel.value = sort;
     put(tools, present.length > 1 || sources.length > 6 ? h('div', { class: 'tools wrap' },
-      present.length > 1 ? [['', 'all'], ...present.map((k) => [k, KINDS[k].several])].map(([k, text]) => h('button', {
+      present.length > 1 ? [['', 'tout'], ...present.map((k) => [k, KINDS[k].several])].map(([k, text]) => h('button', {
         type: 'button', class: `filter${medium === k ? ' on' : ''}`, onclick: () => { prefs.set('libraryMedium', k); draw(); } }, text)) : null,
       h('span', { class: 'grow' }), sortSel) : null);
     let shown = sources.filter((s) => (!medium || s.kind === medium) && (!needle || fold(
@@ -632,30 +635,30 @@ async function viewLibrary({ params }) {
     if (sort === 'title') shown = [...shown].sort((a, b) => a.title.localeCompare(b.title));
     else if (sort === 'added') shown = [...shown].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
     if (!sources.length) {
-      return h('div', { class: 'empty' }, 'Nothing here yet.', h('a', { class: 'btn primary', href: '#/capture' }, 'Capture something'));
+      return h('div', { class: 'empty' }, 'Rien ici pour l’instant.', h('a', { class: 'btn primary', href: '#/capture' }, 'Ajouter quelque chose'));
     }
-    return [shown.length ? h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'source' }), h('span', { class: 'w40 r', text: 'items' })) : null,
-      shown.map((s) => sourceRow(s)), shown.length ? h('div', { class: 'list-end' }) : h('div', { class: 'empty', text: 'Nothing matches.' })];
+    return [shown.length ? h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'source' }), h('span', { class: 'w40 r', text: 'total' })) : null,
+      shown.map((s) => sourceRow(s)), shown.length ? h('div', { class: 'list-end' }) : h('div', { class: 'empty', text: 'Aucun résultat.' })];
   }
 
   function personSub(p) {
     return [
       p.works ? plural(p.works, 'work') : null,
-      p.translated ? `translated ${p.translated}` : null,
-      p.quoted_in ? `quoted in ${p.quoted_in}` : null,
-      p.about_in ? `written about in ${p.about_in}` : null,
+      p.translated ? `${plural(p.translated, 'translation')}` : null,
+      p.quoted_in ? `cité dans ${p.quoted_in}` : null,
+      p.about_in ? `sujet de ${p.about_in}` : null,
       p.notes ? plural(p.notes, 'note') : null,
     ].filter(Boolean).join(' · ');
   }
 
   function drawPeople(needle) {
     let which = prefs.get('peopleFilter', 'everyone');
-    put(tools, people.length > 4 ? filterRow([['everyone', 'everyone'], ['authors', 'authors'], ['about', 'written about']], which,
+    put(tools, people.length > 4 ? filterRow([['everyone', 'tout le monde'], ['authors', 'auteurs'], ['about', 'sujets']], which,
       (k) => { prefs.set('peopleFilter', k); draw(); }) : null);
     const shown = people.filter((p) => (which === 'everyone' || (which === 'authors' ? p.works + p.translated > 0 : p.about_in > 0))
       && (!needle || fold(`${p.name} ${p.sort_name} ${(p.aliases || []).join(' ')}`).includes(needle)));
-    if (!people.length) return h('div', { class: 'empty', text: 'People appear here as you add sources and say who they are about.' });
-    const out = [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'person' }), h('span', { class: 'w40 r', text: 'quotes' }))];
+    if (!people.length) return h('div', { class: 'empty', text: 'Les personnes apparaissent ici quand vous ajoutez des sources et dites de qui elles parlent.' });
+    const out = [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'personne' }), h('span', { class: 'w40 r', text: 'citations' }))];
     let letter = null;
     for (const p of shown) {
       const first = fold(p.sort_name).charAt(0).toUpperCase();
@@ -666,36 +669,36 @@ async function viewLibrary({ params }) {
           h('span', { class: 'a', text: personSub(p) })),
         h('span', { class: 'num w40', text: p.entries })));
     }
-    out.push(shown.length ? h('div', { class: 'list-end' }) : h('div', { class: 'empty', text: 'Nobody matches.' }));
+    out.push(shown.length ? h('div', { class: 'list-end' }) : h('div', { class: 'empty', text: 'Personne ne correspond.' }));
     return out;
   }
 
   function drawTopics(needle) {
     const order = prefs.get('topicsOrder', 'name');
-    put(tools, topics.length > 4 ? filterRow([['name', 'a–z'], ['use', 'most used'], ['notes', 'with notes']], order,
+    put(tools, topics.length > 4 ? filterRow([['name', 'a–z'], ['use', 'les plus utilisés'], ['notes', 'avec des notes']], order,
       (k) => { prefs.set('topicsOrder', k); draw(); }) : null);
     let shown = topics.filter((t) => (order !== 'notes' || t.notes) && (!needle || fold(t.name).includes(needle)));
     if (order === 'use') shown = [...shown].sort((a, b) => b.entries - a.entries);
-    if (!topics.length) return h('div', { class: 'empty', text: 'Topics appear here as you add them to quotes, sources and notes.' });
-    return [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'topic' }), h('span', { class: 'w40 r', text: 'quotes' })),
+    if (!topics.length) return h('div', { class: 'empty', text: 'Les thèmes apparaissent ici quand vous les ajoutez aux citations, aux sources et aux notes.' });
+    return [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'thème' }), h('span', { class: 'w40 r', text: 'citations' })),
       shown.map((t) => h('a', { class: 'pick', href: `#/topic/${t.id}` },
         h('span', { class: 'main' }, h('span', { class: 't tt', text: t.name }),
           h('span', { class: 'a', text: [plural(t.sources, 'source'), t.notes ? plural(t.notes, 'note') : null].filter(Boolean).join(' · ') })),
         h('span', { class: 'num w40', text: t.entries }))),
-      shown.length ? h('div', { class: 'list-end' }) : h('div', { class: 'empty', text: 'No topic matches.' })];
+      shown.length ? h('div', { class: 'list-end' }) : h('div', { class: 'empty', text: 'Aucun thème ne correspond.' })];
   }
 
-  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Show the library by' });
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Afficher la bibliothèque par' });
   function draw() {
     put(seg, LIBRARY_VIEWS.map(([k, text]) => h('button', { type: 'button', class: view === k ? 'on' : '', 'aria-pressed': view === k ? 'true' : 'false',
       onclick: () => setView(k) }, text)));
-    put(title, 'Library', h('span', { class: 'count', text: counts[view] }));
+    put(title, 'Bibliothèque', h('span', { class: 'count', text: counts[view] }));
     nav.label(LIBRARY_VIEWS.find(([k]) => k === view)[1]);
     const needle = fold(q.value.trim());
     put(list, view === 'people' ? drawPeople(needle) : view === 'topics' ? drawTopics(needle) : drawSources(needle),
       needle.length > 1 ? [h('a', { class: 'more-btn', href: `#/quotes?q=${encodeURIComponent(q.value.trim())}` },
-        `Quotes containing “${q.value.trim()}” ›`), h('a', { class: 'more-btn', href: `#/notes?q=${encodeURIComponent(q.value.trim())}` },
-        `Notes containing “${q.value.trim()}” ›`)] : null);
+        `Citations contenant « ${q.value.trim()} » ›`), h('a', { class: 'more-btn', href: `#/notes?q=${encodeURIComponent(q.value.trim())}` },
+        `Notes contenant « ${q.value.trim()} » ›`)] : null);
   }
   q.addEventListener('input', draw);
   draw();
@@ -703,10 +706,10 @@ async function viewLibrary({ params }) {
     h('header', { class: 'top' },
       h('div', { class: 'top-row' }, title,
         h('div', { class: 'icons' },
-          h('a', { class: 'icon-btn narrow-only', href: '#/settings', 'aria-label': 'Settings' }, icon('more', 22)),
-          h('a', { class: 'icon-btn', href: '#/source/new', 'aria-label': 'Add a source' }, icon('plus', 22)))),
+          h('a', { class: 'icon-btn narrow-only', href: '#/settings', 'aria-label': 'Réglages' }, icon('more', 22)),
+          h('a', { class: 'icon-btn', href: '#/source/new', 'aria-label': 'Ajouter une source' }, icon('plus', 22)))),
       seg,
-      inbox.length ? h('a', { class: 'filter ink', href: '#/inbox' }, `inbox · ${plural(inbox.length, 'page')} to sort`) : null,
+      inbox.length ? h('a', { class: 'filter ink', href: '#/inbox' }, `à trier · ${plural(inbox.length, 'page')}`) : null,
       h('label', { class: 'search' }, icon('search', 16), q),
       tools),
     list);
@@ -736,7 +739,7 @@ function foldable(key, head, body) {
     box.hidden = folded;
     btn.textContent = folded ? '+' : '−';
     btn.setAttribute('aria-expanded', String(!folded));
-    btn.setAttribute('aria-label', folded ? 'Show this part' : 'Hide this part');
+    btn.setAttribute('aria-label', folded ? 'Afficher cette partie' : 'Masquer cette partie');
     head.classList.toggle('folded', folded);
   };
   btn.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); folded = !folded; folds.set(key, folded); apply(); });
@@ -759,12 +762,12 @@ async function viewSource({ args: [id] }) {
   nav.flash = {};
   let selecting = false;
   const chosen = new Set();
-  const q = h('input', { type: 'search', placeholder: 'Search here', 'aria-label': 'Search in this source', enterkeyhint: 'search' });
+  const q = h('input', { type: 'search', placeholder: 'Chercher ici', 'aria-label': 'Chercher dans cette source', enterkeyhint: 'search' });
   const list = h('div');
   const selectBar = h('div', { class: 'select-bar', hidden: true });
   const orderBtn = k.where ? h('button', { type: 'button', class: 'filter', onclick: () => {
     prefs.set('sourceOrder', order === 'page' ? 'date' : 'page'); render();
-  } }, order === 'page' ? `by ${k.where === 'page' ? 'page' : 'place'}` : 'by date') : null;
+  } }, order === 'page' ? `par ${k.where === 'page' ? 'page' : 'emplacement'}` : 'par date') : null;
 
   const needle = () => fold(q.value.trim());
   const shownEntries = () => entries.filter((e) => !needle() || fold(`${e.text} ${e.note || ''} ${e.topics.map((t) => t.name).join(' ')} ${e.page || ''}`).includes(needle()));
@@ -773,20 +776,20 @@ async function viewSource({ args: [id] }) {
   function drawSelectBar() {
     const shown = shownEntries();
     put(selectBar,
-      h('span', { class: 'grow', text: chosen.size ? `${chosen.size} selected` : 'Tap the quotes to delete' }),
+      h('span', { class: 'grow', text: chosen.size ? `${chosen.size} sélectionnée${chosen.size > 1 ? 's' : ''}` : 'Touchez les citations à supprimer' }),
       h('button', { type: 'button', class: 'btn small', onclick: () => {
         const all = shown.every((e) => chosen.has(e.id));
         shown.forEach((e) => (all ? chosen.delete(e.id) : chosen.add(e.id)));
         draw();
-      } }, shown.length && shown.every((e) => chosen.has(e.id)) ? 'None' : 'All'),
+      } }, shown.length && shown.every((e) => chosen.has(e.id)) ? 'Aucune' : 'Toutes'),
       h('button', { type: 'button', class: 'btn small danger primary', disabled: !chosen.size, onclick: async () => {
         const n = chosen.size;
-        const ok = await confirmDialog({ title: `Delete ${plural(n, 'quote')}?`, text: 'This cannot be undone.',
-          choices: [{ label: `Delete ${plural(n, 'quote')}`, value: true, danger: true }] });
+        const ok = await confirmDialog({ title: `Supprimer ${plural(n, 'quote')} ?`, text: 'C’est définitif.',
+          choices: [{ label: `Supprimer ${plural(n, 'quote')}`, value: true, danger: true }] });
         if (!ok) return;
-        try { await deleteEntries([...chosen]); toast(`${plural(n, 'quote')} deleted`); render(); } catch (err) { toast(err.message); }
-      } }, 'Delete'),
-      h('button', { type: 'button', class: 'btn small plain', onclick: () => { selecting = false; chosen.clear(); draw(); } }, 'Done'));
+        try { await deleteEntries([...chosen]); toast(`${plural(n, 'quote')} supprimée${n > 1 ? 's' : ''}`); render(); } catch (err) { toast(err.message); }
+      } }, 'Supprimer'),
+      h('button', { type: 'button', class: 'btn small plain', onclick: () => { selecting = false; chosen.clear(); draw(); } }, 'Terminé'));
   }
 
   function draw() {
@@ -795,7 +798,7 @@ async function viewSource({ args: [id] }) {
     if (selecting) {
       drawSelectBar();
       put(list, shown.map((e) => {
-        const box = h('input', { type: 'checkbox', checked: chosen.has(e.id), 'aria-label': 'Select', onchange: () => {
+        const box = h('input', { type: 'checkbox', checked: chosen.has(e.id), 'aria-label': 'Sélectionner', onchange: () => {
           if (box.checked) chosen.add(e.id); else chosen.delete(e.id);
           drawSelectBar();
         } });
@@ -806,7 +809,7 @@ async function viewSource({ args: [id] }) {
     }
     const sn = shownNotes();
     const both = notes.length && entries.length;
-    const quotesPart = shown.length ? entryList(shown, { showSource: false, source: source.id, fresh, head: both ? false : 'quote' }) : null;
+    const quotesPart = shown.length ? entryList(shown, { showSource: false, source: source.id, fresh, head: both ? false : 'citation' }) : null;
     const notesPart = sn.length ? [sn.map((n) => noteBlock(n, { here: { source: source.id }, fresh: n.id === freshNote })), h('div', { class: 'list-end' })] : null;
     const parts = [];
     const section = (key, title, count, content) => {
@@ -814,38 +817,38 @@ async function viewSource({ args: [id] }) {
       if (!both) { parts.push(content); return; }   // one kind only: no heading needed
       parts.push(...foldable(`source:${source.id}:${key}`, sectionHead(null, title, count), content));
     };
-    const notesSection = () => section('notes', 'Your notes', sn.length, notesPart);
-    const quotesSection = () => section('quotes', 'Quotes', shown.length, quotesPart);
+    const notesSection = () => section('notes', 'Vos notes', sn.length, notesPart);
+    const quotesSection = () => section('quotes', 'Citations', shown.length, quotesPart);
     if (k.notesFirst) { notesSection(); quotesSection(); } else { quotesSection(); notesSection(); }
     put(list, parts,
-      !shown.length && !sn.length && (entries.length || notes.length) ? h('div', { class: 'empty', text: 'Nothing matches.' }) : null,
-      !entries.length && !notes.length ? h('div', { class: 'empty' }, 'Nothing captured from it yet.',
+      !shown.length && !sn.length && (entries.length || notes.length) ? h('div', { class: 'empty', text: 'Aucun résultat.' }) : null,
+      !entries.length && !notes.length ? h('div', { class: 'empty' }, 'Rien d’ajouté pour l’instant.',
         h('div', { class: 'row-btns' },
-          h('a', { class: 'btn primary', href: `#/capture?source=${source.id}` }, '+ Capture'),
+          h('a', { class: 'btn primary', href: `#/capture?source=${source.id}` }, '+ Ajouter'),
           h('a', { class: 'btn', href: `#/note/new?source=${source.id}` }, '+ Note'))) : null);
   }
   q.addEventListener('input', draw);
 
   const removeSource = async () => {
     const n = entries.length;
-    const kept = notes.length ? ` Your ${plural(notes.length, 'note')} on it ${notes.length === 1 ? 'is' : 'are'} kept.` : '';
+    const kept = notes.length ? (notes.length === 1 ? ' Votre note sur elle est gardée.' : ` Vos ${plural(notes.length, 'note')} sur elle sont gardées.`) : '';
     const choice = await confirmDialog({
-      title: `Delete “${source.title}”?`,
-      text: (n ? `It has ${plural(n, 'quote')}. This cannot be undone.` : 'This cannot be undone.') + kept,
+      title: `Supprimer « ${source.title} » ?`,
+      text: (n ? `Elle contient ${plural(n, 'quote')}. C’est définitif.` : 'C’est définitif.') + kept,
       choices: [
-        { label: n ? `Delete it and its ${plural(n, 'quote')}` : 'Delete it', value: 'all', danger: true },
-        n ? { label: `Delete only its ${plural(n, 'quote')}`, value: 'entries' } : null,
+        { label: n ? `La supprimer avec ses ${plural(n, 'quote')}` : 'La supprimer', value: 'all', danger: true },
+        n ? { label: `Supprimer seulement ses ${plural(n, 'quote')}`, value: 'entries' } : null,
       ].filter(Boolean),
     });
     try {
       if (choice === 'all') {
         await api(`/api/sources/${source.id}`, { method: 'DELETE' });
         store.changed();
-        toast('Deleted');
+        toast('Supprimée');
         nav.back('');
       } else if (choice === 'entries') {
         await deleteEntries(entries.map((e) => e.id));
-        toast(`${plural(n, 'quote')} deleted`);
+        toast(`${plural(n, 'quote')} supprimée${n > 1 ? 's' : ''}`);
         render();
       }
     } catch (err) { toast(err.message); }
@@ -867,7 +870,7 @@ async function viewSource({ args: [id] }) {
     })();
   }
   const people = source.people;
-  const details = joinDots([h('span', { class: 'sc', text: source.kind }), source.publisher,
+  const details = joinDots([h('span', { class: 'sc', text: k.label }), source.publisher,
     source.date ? plainDate(source.date) : source.year, source.edition, source.field ? h('i', { text: source.field }) : null]);
   const counts = [source.quote_count ? plural(source.quote_count, 'quote') : null, source.note_count ? plural(source.note_count, 'note') : null]
     .filter(Boolean).join(' · ');
@@ -875,20 +878,20 @@ async function viewSource({ args: [id] }) {
     h('h1', { text: source.title }),
     source.subtitle ? h('span', { class: 'it', text: source.subtitle }) : null,
     makers(source).length ? h('span', { class: 'by' }, personLinks(makers(source))) : null,
-    people.translator.length ? h('span', { class: 'meta' }, 'translated by ', personLinks(people.translator)) : null,
+    people.translator.length ? h('span', { class: 'meta' }, 'traduit par ', personLinks(people.translator)) : null,
     h('span', { class: 'meta' }, details),
-    people.about.length ? h('span', { class: 'meta' }, 'about ', personLinks(people.about)) : null,
+    people.about.length ? h('span', { class: 'meta' }, 'sur ', personLinks(people.about)) : null,
     source.topics.length ? topicLinks(source.topics) : null,
     counts ? h('span', { class: 'counts', text: counts }) : null,
     h('div', { class: 'actions' },
-      h('a', { class: 'btn primary small', href: `#/capture?source=${source.id}` }, '+ Capture'),
+      h('a', { class: 'btn primary small', href: `#/capture?source=${source.id}` }, '+ Ajouter'),
       h('a', { class: 'btn small', href: `#/note/new?source=${source.id}` }, '+ Note'),
       source.url ? h('a', { class: 'btn small', href: source.url, target: '_blank', rel: 'noopener noreferrer' },
-        k.link && source.kind !== 'article' ? `Open the ${source.kind}` : 'Open the link', icon('external', 14)) : null,
-      entries.length || notes.length ? h('a', { class: 'btn small', href: `/api/sources/${source.id}/export.md`, download: '' }, 'Export') : null,
-      entries.length ? h('button', { class: 'btn small', type: 'button', onclick: () => { selecting = true; draw(); } }, 'Select') : null));
+        k.link && source.kind !== 'article' ? `Ouvrir ${k.the}` : 'Ouvrir le lien', icon('external', 14)) : null,
+      entries.length || notes.length ? h('a', { class: 'btn small', href: `/api/sources/${source.id}/export.md`, download: '' }, 'Exporter') : null,
+      entries.length ? h('button', { class: 'btn small', type: 'button', onclick: () => { selecting = true; draw(); } }, 'Sélectionner') : null));
   const el = h('div', {},
-    bar(backButton('', 'Library'), '', h('a', { class: 'link-btn', href: `#/source/${id}/edit` }, 'Edit')),
+    bar(backButton('', 'Bibliothèque'), '', h('a', { class: 'link-btn', href: `#/source/${id}/edit` }, 'Modifier')),
     h('header', { class: 'top', style: { paddingTop: '6px' } },
       wide ? [coverEl, h('div', { class: 'book-head' }, info)] : h('div', { class: 'book-head' }, coverEl, info),
       entries.length + notes.length > 5 ? h('label', { class: 'search' }, icon('search', 16), q) : null,
@@ -896,13 +899,13 @@ async function viewSource({ args: [id] }) {
     list,
     selectBar,
     h('div', { class: 'pad' }, h('button', { class: 'btn small danger', type: 'button', style: { alignSelf: 'flex-start' }, onclick: removeSource },
-      `Delete this ${k.name.toLowerCase()}…`)));
+      `Supprimer ${k.this}…`)));
   return { el, nav: 'library' };
 }
 
 // ----- a person -----
 
-const SECTION_TITLES = { works: 'Works', translated: 'Translations', said: 'Said', quoted: 'Quoted elsewhere' };
+const SECTION_TITLES = { works: 'Œuvres', translated: 'Traductions', said: 'Paroles', quoted: 'Cité ailleurs' };
 
 function noteBlock(n, { full = false, here = null, fresh = false } = {}) {
   const on = (n.sources || []).filter((s) => s.id !== here?.source);
@@ -912,7 +915,7 @@ function noteBlock(n, { full = false, here = null, fresh = false } = {}) {
     n.title || n.place ? h('b', { class: 'note-title', text: [placeText(n.place), n.title].filter(Boolean).join(' — ') }) : null,
     h('p', { class: 'note-text', text: n.text }),
     h('span', { class: 'meta' }, joinDots([on.length ? h('i', { text: shorten(on.map((s) => s.title).join(', '), 60) }) : null,
-      fullDate(n.created_at), also.length ? `also on ${also.join(', ')}` : null])));
+      fullDate(n.created_at), also.length ? `aussi sur ${also.join(', ')}` : null])));
 }
 
 async function viewPerson({ args: [id] }) {
@@ -945,7 +948,7 @@ async function viewPerson({ args: [id] }) {
       if (!groups.length) continue;
       const quotes = groups.reduce((a, g) => a + g.entries.length, 0);
       const noteCount = groups.reduce((a, g) => a + g.notes.length, 0);
-      const title = sec.key === 'about' ? `About ${surname(p)}` : SECTION_TITLES[sec.key];
+      const title = sec.key === 'about' ? `Sur ${surname(p)}` : SECTION_TITLES[sec.key];
       const count = [sec.key === 'said' ? null : plural(groups.filter((g) => g.source).length, 'source'),
         quotes ? plural(quotes, 'quote') : null, noteCount ? plural(noteCount, 'note') : null].filter(Boolean).join(' · ');
       parts.push(...foldable(`person:${p.id}:${sec.key}`, sectionHead(null, title, count), groups.map((g) => groupBlock(sec, g))));
@@ -954,30 +957,30 @@ async function viewPerson({ args: [id] }) {
     let k = notes && !isWide() ? 1 : 0;
     for (const el of parts) if (el.classList?.contains('section-head')) el.querySelector('h2').prepend(h('span', { class: 'num-sec', text: ++k }));
     if (isWide()) {
-      put(body, parts.length ? [parts, h('div', { class: 'list-end' })] : h('div', { class: 'empty', text: 'Nothing about this person yet.' }));
-      put(aside, notes || h('div', { class: 'note-line', text: 'No notes on them yet.' }));
+      put(body, parts.length ? [parts, h('div', { class: 'list-end' })] : h('div', { class: 'empty', text: 'Rien sur cette personne pour l’instant.' }));
+      put(aside, notes || h('div', { class: 'note-line', text: 'Pas encore de note sur cette personne.' }));
     } else {
       put(body, notes, parts, parts.length ? h('div', { class: 'list-end' }) : null,
-        !parts.length && !notes ? h('div', { class: 'empty', text: 'Nothing about this person yet.' }) : null);
+        !parts.length && !notes ? h('div', { class: 'empty', text: 'Rien sur cette personne pour l’instant.' }) : null);
     }
   }
   draw();
   const kinds = Object.keys(media);
-  const counts = [p.works ? plural(p.works, 'work') : null, p.translated ? `translated ${p.translated}` : null,
-    p.said ? `said ${p.said}` : null, p.quoted_in ? `quoted in ${plural(p.quoted_in, 'source')}` : null,
-    p.about_in ? `written about in ${p.about_in}` : null, plural(p.entries, 'quote')].filter(Boolean).join(' · ');
+  const counts = [p.works ? plural(p.works, 'work') : null, p.translated ? `${plural(p.translated, 'translation')}` : null,
+    p.said ? `${p.said} parole${p.said > 1 ? 's' : ''}` : null, p.quoted_in ? `cité dans ${plural(p.quoted_in, 'source')}` : null,
+    p.about_in ? `sujet de ${p.about_in}` : null, plural(p.entries, 'quote')].filter(Boolean).join(' · ');
   const el = h('div', {},
-    bar(backButton('?view=people', 'People'), '', h('a', { class: 'link-btn', href: `#/person/${id}/edit` }, 'Edit')),
+    bar(backButton('?view=people', 'Personnes'), '', h('a', { class: 'link-btn', href: `#/person/${id}/edit` }, 'Modifier')),
     h('header', { class: 'top', style: { paddingTop: '6px' } },
       h('h1', { text: p.sort_name }),
       p.dates ? h('span', { class: 'meta', text: p.dates }) : null,
       h('span', { class: 'meta', text: counts }),
-      p.aliases.length ? h('span', { class: 'meta it', text: `Also written: ${p.aliases.join(', ')}` }) : null,
+      p.aliases.length ? h('span', { class: 'meta it', text: `Aussi écrit : ${p.aliases.join(', ')}` }) : null,
       h('div', { class: 'actions' },
         h('a', { class: 'btn small', href: `#/note/new?person=${p.id}` }, '+ Note'),
-        h('a', { class: 'btn small', href: `#/capture?said=${p.id}` }, `+ Words ${surname(p)} said`),
-        h('a', { class: 'btn small', href: `#/capture?about=${p.id}` }, `+ Capture about ${surname(p)}`)),
-      kinds.length > 1 ? filterRow([['', 'all'], ...kinds.map((m) => [m, `${m === 'said' ? 'said' : KINDS[m].several} ${media[m]}`])], '',
+        h('a', { class: 'btn small', href: `#/capture?said=${p.id}` }, `+ Paroles de ${surname(p)}`),
+        h('a', { class: 'btn small', href: `#/capture?about=${p.id}` }, `+ Ajouter sur ${surname(p)}`)),
+      kinds.length > 1 ? filterRow([['', 'tout'], ...kinds.map((m) => [m, `${m === 'said' ? 'paroles' : KINDS[m].several} ${media[m]}`])], '',
         (m) => { medium = m; draw(); }) : null),
     h('div', { class: 'two-col' }, body, isWide() ? aside : null));
   return { el, nav: 'library' };
@@ -995,10 +998,10 @@ async function viewTopic({ args: [id] }) {
     const map = new Map();
     for (const e of data.entries) {
       let key; let label; let href = null;
-      if (by === 'person') { key = e.by ? 'p' + e.by.id : 'none'; label = e.by ? e.by.sort_name : 'No author'; href = e.by ? `#/person/${e.by.id}` : null; }
+      if (by === 'person') { key = e.by ? 'p' + e.by.id : 'none'; label = e.by ? e.by.sort_name : 'Sans auteur'; href = e.by ? `#/person/${e.by.id}` : null; }
       else if (by === 'source') {
         key = e.source ? 's' + e.source.id : 'said';
-        label = e.source ? e.source.title : 'Said, no source';
+        label = e.source ? e.source.title : 'Paroles, sans source';
         href = e.source ? `#/source/${e.source.id}` : null;
       } else { key = e.created_at.slice(0, 7); label = plainDate(key); }
       if (!map.has(key)) map.set(key, { key, label, href, entries: [] });
@@ -1017,24 +1020,24 @@ async function viewTopic({ args: [id] }) {
   draw();
   let n = 0;
   const el = h('div', {},
-    bar(backButton('?view=topics', 'Topics'), '', h('a', { class: 'link-btn', href: `#/topic/${id}/edit` }, 'Edit')),
+    bar(backButton('?view=topics', 'Thèmes'), '', h('a', { class: 'link-btn', href: `#/topic/${id}/edit` }, 'Modifier')),
     h('header', { class: 'top', style: { paddingTop: '6px' } },
       h('h1', { text: t.name }),
       h('span', { class: 'meta', text: [plural(t.sources, 'source'), plural(data.people.length, 'person'), plural(t.entries, 'quote'),
         t.notes ? plural(t.notes, 'note') : null].filter(Boolean).join(' · ') }),
-      data.people.length ? h('div', { class: 'chips' }, h('span', { class: 'label', text: 'people' }),
+      data.people.length ? h('div', { class: 'chips' }, h('span', { class: 'label', text: 'personnes' }),
         data.people.slice(0, 12).map((pp) => h('a', { class: 'chip serif', href: `#/person/${pp.id}` }, surname(pp), h('span', { class: 'n', text: pp.count })))) : null,
-      data.related.length ? h('div', { class: 'chips' }, h('span', { class: 'label', text: 'often with' }),
+      data.related.length ? h('div', { class: 'chips' }, h('span', { class: 'label', text: 'souvent avec' }),
         data.related.map((r) => h('a', { class: 'chip', href: `#/topic/${r.id}` }, r.name, h('span', { class: 'n', text: r.count })))) : null,
       h('div', { class: 'actions' },
         h('a', { class: 'btn small', href: `#/note/new?topic=${t.id}` }, '+ Note'),
-        h('a', { class: 'btn small', href: `#/capture?topic=${t.id}` }, '+ Capture'))),
+        h('a', { class: 'btn small', href: `#/capture?topic=${t.id}` }, '+ Ajouter'))),
     data.notes.length ? foldable(`topic:${t.id}:notes`, sectionHead(++n, 'Notes', data.notes.length),
       data.notes.map((note) => noteBlock(note, { full: true, here: { topic: t.id } }))) : null,
-    data.entries.length ? [...foldable(`topic:${t.id}:quotes`, sectionHead(++n, 'Quotes', data.entries.length), [
-      h('div', { class: 'tools pad-x' }, h('span', { class: 'label', text: 'group by' }),
-        segmented('Group quotes by', [['person', 'person'], ['source', 'source'], ['date', 'date']], by, (k) => { by = k; prefs.set('topicGroup', k); draw(); })),
-      body])] : h('div', { class: 'empty', text: 'No quote on this topic yet.' }));
+    data.entries.length ? [...foldable(`topic:${t.id}:quotes`, sectionHead(++n, 'Citations', data.entries.length), [
+      h('div', { class: 'tools pad-x' }, h('span', { class: 'label', text: 'grouper par' }),
+        segmented('Grouper les citations par', [['person', 'personne'], ['source', 'source'], ['date', 'date']], by, (k) => { by = k; prefs.set('topicGroup', k); draw(); })),
+      body])] : h('div', { class: 'empty', text: 'Pas encore de citation sur ce thème.' }));
   return { el, nav: 'library' };
 }
 
@@ -1061,7 +1064,7 @@ async function viewEntries({ params }) {
     }
   }
   await load(false);
-  nav.label('Quotes');
+  nav.label('Citations');
   const setFilter = (key, value) => {
     f[key] = value;
     const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v));
@@ -1071,11 +1074,11 @@ async function viewEntries({ params }) {
     offset = 0;
     load(false).then(draw).catch((err) => put(list, errorBox(err)));
   };
-  const q = h('input', { type: 'search', placeholder: 'Search words, people, topics', 'aria-label': 'Search quotes', value: f.q, enterkeyhint: 'search' });
+  const q = h('input', { type: 'search', placeholder: 'Chercher des mots, des personnes, des thèmes', 'aria-label': 'Chercher dans les citations', value: f.q, enterkeyhint: 'search' });
   q.addEventListener('input', debounce(() => setFilter('q', q.value.trim()), 350));
-  const mediumSel = h('select', { class: 'filter', 'aria-label': 'From', onchange: () => setFilter('medium', mediumSel.value) },
-    h('option', { value: '' }, 'from everything'), Object.entries(KINDS).map(([k, v]) => h('option', { value: k }, `from ${v.several}`)),
-    h('option', { value: 'said' }, 'said, no source'));
+  const mediumSel = h('select', { class: 'filter', 'aria-label': 'Provenance', onchange: () => setFilter('medium', mediumSel.value) },
+    h('option', { value: '' }, 'de partout'), Object.entries(KINDS).map(([k, v]) => h('option', { value: k }, `des ${v.several}`)),
+    h('option', { value: 'said' }, 'paroles, sans source'));
   mediumSel.value = f.medium;
   const list = h('div');
   const count = h('span', { class: 'count' });
@@ -1083,13 +1086,13 @@ async function viewEntries({ params }) {
     count.textContent = entries.length + (more ? '+' : '');
     put(list,
       entryList(entries, { showSource: true }),
-      entries.length ? null : h('div', { class: 'empty', text: f.q || f.medium ? 'Nothing matches.' : 'No quotes yet.' }),
-      more ? h('div', { class: 'pad' }, h('button', { class: 'btn', type: 'button', onclick: async () => { offset += PAGE; await load(true); draw(); } }, 'Show more')) : null);
+      entries.length ? null : h('div', { class: 'empty', text: f.q || f.medium ? 'Aucun résultat.' : 'Pas encore de citation.' }),
+      more ? h('div', { class: 'pad' }, h('button', { class: 'btn', type: 'button', onclick: async () => { offset += PAGE; await load(true); draw(); } }, 'Afficher plus')) : null);
   }
   draw();
   const el = h('div', {},
     h('header', { class: 'top' },
-      h('div', { class: 'top-row' }, h('h1', {}, 'Quotes', count)),
+      h('div', { class: 'top-row' }, h('h1', {}, 'Citations', count)),
       h('label', { class: 'search' }, icon('search', 16), q),
       h('div', { class: 'tools half' }, mediumSel)),
     list);
@@ -1101,7 +1104,7 @@ async function viewEntries({ params }) {
 
 function citation(e, source) {
   if (!source) return `${e.by?.name || ''}${e.page ? ', ' + e.page : ''}`;
-  const who = e.words_by ? `${e.words_by.name}, quoted in ` : '';
+  const who = e.words_by ? `${e.words_by.name}, cité dans ` : '';
   const by = makers(source).map((p) => p.name).join(', ');
   const place = where(e);
   return `${who}${by ? by + ', ' : ''}${source.title}${source.year ? ` (${source.year})` : source.date ? ` (${plainDate(source.date)})` : ''}${place ? ', ' + place : ''}`;
@@ -1110,46 +1113,46 @@ function citation(e, source) {
 async function viewEntry({ args: [id] }) {
   const e = await api(`/api/entries/${id}`);
   const source = e.source ? await api(`/api/sources/${e.source.id}`) : null;
-  nav.label('Quote');
+  nav.label('Citation');
   const home = source ? `source/${source.id}` : e.by ? `person/${e.by.id}` : 'quotes';
   const del = async () => {
-    const ok = await confirmDialog({ title: 'Delete this quote?', text: 'This cannot be undone.',
-      choices: [{ label: 'Delete the quote', value: true, danger: true }] });
+    const ok = await confirmDialog({ title: 'Supprimer cette citation ?', text: 'C’est définitif.',
+      choices: [{ label: 'Supprimer la citation', value: true, danger: true }] });
     if (!ok) return;
     try {
       await deleteEntries([e.id]);
-      toast('Quote deleted');
+      toast('Citation supprimée');
       nav.back(home);
     } catch (err) { toast(err.message); }
   };
   const copy = async () => {
-    try { await navigator.clipboard.writeText(`${e.text}\n— ${citation(e, source)}`); toast('Copied with its reference'); } catch { toast('Copying is not allowed here'); }
+    try { await navigator.clipboard.writeText(`${e.text}\n— ${citation(e, source)}`); toast('Copiée avec sa référence'); } catch { toast('Copier n’est pas permis ici'); }
   };
-  const linkLabel = source?.kind === 'article' ? 'Open at this passage' : `Open the ${source?.kind}`;
+  const linkLabel = source?.kind === 'article' ? 'Ouvrir à ce passage' : `Ouvrir ${kindOf(source).the}`;
   const el = h('div', {},
-    bar(backButton(home, source ? shorten(source.title, 24) : e.by ? surname(e.by) : 'Quotes'), '', h('a', { class: 'link-btn', href: `#/entry/${id}/edit` }, 'Edit')),
+    bar(backButton(home, source ? shorten(source.title, 24) : e.by ? surname(e.by) : 'Citations'), '', h('a', { class: 'link-btn', href: `#/entry/${id}/edit` }, 'Modifier')),
     h('article', { class: 'entry-page' },
       source ? h('a', { class: 'book-link', href: `#/source/${source.id}` }, thumb(source),
         h('span', {}, h('span', { class: 't', text: source.title }), makers(source).length ? [h('br'), h('span', { class: 'muted', text: makers(source).map((p) => p.name).join(', ') })] : null))
-        : h('p', { class: 'words-by said' }, h('span', { class: 'sc', text: 'said by ' }),
+        : h('p', { class: 'words-by said' }, h('span', { class: 'sc', text: 'paroles de ' }),
           e.by ? h('a', { class: 'plink', href: `#/person/${e.by.id}`, text: e.by.name }) : null, e.page ? `, ${e.page}` : ''),
       h('div', { class: 'kv' }, joinDots([where(e) || null, fullDate(e.created_at)])),
-      source && e.words_by ? h('p', { class: 'words-by' }, h('span', { class: 'sc', text: 'words of ' }), h('a', { class: 'plink', href: `#/person/${e.words_by.id}`, text: e.words_by.name }),
-        `, quoted by ${makers(source).map((p) => p.name).join(', ') || 'the source'}`) : null,
+      source && e.words_by ? h('p', { class: 'words-by' }, h('span', { class: 'sc', text: 'paroles de ' }), h('a', { class: 'plink', href: `#/person/${e.words_by.id}`, text: e.words_by.name }),
+        `, cité par ${makers(source).map((p) => p.name).join(', ') || 'la source'}`) : null,
       h('p', { class: 'quote-env', lang: source?.language || null, text: e.text }),
-      e.note ? h('p', { class: 'note-p' }, h('b', { text: 'Comment.' }), e.note) : null,
-      e.about.length ? h('p', { class: 'kv-line' }, h('span', { class: 'label', text: 'about ' }), personLinks(e.about)) : null,
+      e.note ? h('p', { class: 'note-p' }, h('b', { text: 'Commentaire.' }), e.note) : null,
+      e.about.length ? h('p', { class: 'kv-line' }, h('span', { class: 'label', text: 'sur ' }), personLinks(e.about)) : null,
       e.topics.length ? topicLinks(e.topics) : null,
       e.link ? h('a', { class: 'btn small', href: e.link, target: '_blank', rel: 'noopener noreferrer', style: { alignSelf: 'flex-start' } }, linkLabel, icon('external', 14)) : null,
-      e.notes?.length ? h('div', { class: 'kv-line' }, h('span', { class: 'label', text: 'in your notes ' }),
+      e.notes?.length ? h('div', { class: 'kv-line' }, h('span', { class: 'label', text: 'dans vos notes ' }),
         e.notes.flatMap((n, k) => [k ? ', ' : '', h('a', { class: 'plink', href: `#/note/${n.id}`, text: n.title })])) : null,
       h('p', { class: 'cite muted', text: citation(e, source) }),
       h('div', { class: 'row-btns' },
-        h('a', { class: 'btn small', href: `#/entry/${id}/edit` }, 'Edit'),
+        h('a', { class: 'btn small', href: `#/entry/${id}/edit` }, 'Modifier'),
         e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo` }, 'Photo') : null,
-        h('button', { class: 'btn small', type: 'button', onclick: copy }, 'Copy'),
+        h('button', { class: 'btn small', type: 'button', onclick: copy }, 'Copier'),
         h('a', { class: 'btn small', href: `#/note/new?entry=${e.id}` }, '+ Note'),
-        h('button', { class: 'btn small danger', type: 'button', onclick: del }, 'Delete…'))));
+        h('button', { class: 'btn small danger', type: 'button', onclick: del }, 'Supprimer…'))));
   return { el, nav: 'quotes' };
 }
 
@@ -1162,19 +1165,19 @@ function entryFields({ source, sources, people, topics, entry = null, about = nu
   const page = h('input', { class: 'input', id: 'f-page', value: entry?.page || '', inputmode: 'text' });
   const pageLabel = h('span');
   const sourceSel = h('select', { class: 'select', id: 'f-source' },
-    h('option', { value: '', disabled: Boolean(entry?.photo_id) }, 'none: words someone said'),   // a photo's quote keeps its source
+    h('option', { value: '', disabled: Boolean(entry?.photo_id) }, 'aucune : paroles de quelqu’un'),   // a photo's quote keeps its source
     sources.map((s) => h('option', { value: String(s.id) }, shorten(s.title, 60))));
   sourceSel.value = source ? String(source.id) : '';
   const wordsBy = peopleInput('', entry?.words_by ? [entry.words_by] : !source && entry?.by ? [entry.by] : [], people,
     { single: true, id: 'f-by' });
-  const aboutIn = peopleInput('about', about || entry?.about || source?.people.about || [], people,
-    { id: 'f-about', placeholder: 'who it is about', onchange: () => { touchedAbout = true; } });
-  const topicsIn = topicsInput('topics', topicNames || (entry ? entry.topics.map((t) => t.name) : (source?.topics || []).map((t) => t.name)), topics,
+  const aboutIn = peopleInput('sur', about || entry?.about || source?.people.about || [], people,
+    { id: 'f-about', placeholder: 'de qui il s’agit', onchange: () => { touchedAbout = true; } });
+  const topicsIn = topicsInput('thèmes', topicNames || (entry ? entry.topics.map((t) => t.name) : (source?.topics || []).map((t) => t.name)), topics,
     { id: 'f-topics', onchange: () => { touchedTopics = true; } });
   if (about) touchedAbout = true;
   if (topicNames) touchedTopics = true;
   const note = h('textarea', { class: 'textarea', rows: 3, id: 'f-note', value: entry?.note || '' });
-  const noteField = h('label', { class: 'field', for: 'f-note' }, h('span', { text: 'your comment' }), note);
+  const noteField = h('label', { class: 'field', for: 'f-note' }, h('span', { text: 'votre commentaire' }), note);
   const pageField = h('label', { class: 'field', for: 'f-page' }, pageLabel, page);
   const pageRow = h('div', { class: 'two', hidden: !place }, pageField,
     h('label', { class: 'field grow', for: 'f-source' }, h('span', { text: 'source' }), sourceSel));
@@ -1182,10 +1185,10 @@ function entryFields({ source, sources, people, topics, entry = null, about = nu
   function arrange() {
     // with no source, who said it comes first; otherwise last, for a quote within a quote
     const said = !current;
-    wordsBy.el.querySelector('.label').textContent = said ? 'said by' : 'words of (when not the author’s)';
-    wordsBy.el.querySelector('input')?.setAttribute('placeholder', said ? 'who said it' : 'a quote within the quote');
+    wordsBy.el.querySelector('.label').textContent = said ? 'dit par' : 'paroles de (si ce n’est pas l’auteur)';
+    wordsBy.el.querySelector('input')?.setAttribute('placeholder', said ? 'qui l’a dit' : 'une citation dans la citation');
     if (said) holder.prepend(wordsBy.el); else holder.append(wordsBy.el);
-    pageLabel.textContent = said ? 'where, when' : kindOf(current).where || 'where';
+    pageLabel.textContent = said ? 'où, quand' : kindOf(current).where || 'où';
     pageField.style.width = said ? '' : '110px';
     pageField.classList.toggle('grow', said);
     pageField.hidden = !said && !kindOf(current).where && !page.value;     // articles, videos: no place inside them
@@ -1225,29 +1228,29 @@ function entryFields({ source, sources, people, topics, entry = null, about = nu
 async function viewEntryEdit({ args: [id] }) {
   const [e, sources, people, topics] = await Promise.all([api(`/api/entries/${id}`), store.sources(), store.people(), store.topics()]);
   const source = e.source ? sources.find((s) => s.id === e.source.id) || await api(`/api/sources/${e.source.id}`) : null;
-  nav.label('Edit');
+  nav.label('Modifier');
   const text = h('textarea', { class: 'textarea', rows: 6, id: 'f-text', value: e.text });
   const fields = entryFields({ source, sources, people, topics, entry: e });
   const msg = h('div', { class: 'note-line', role: 'alert' });
   const save = async (ev) => {
     ev.preventDefault();
     const body = { ...fields.values(), text: text.value };
-    if (!body.source_id && !body.words_by) { msg.textContent = 'Say who said it: with no source, a quote needs a person.'; return; }
+    if (!body.source_id && !body.words_by) { msg.textContent = 'Dites qui l’a dit : sans source, une citation a besoin d’une personne.'; return; }
     try {
       await api(`/api/entries/${id}`, { method: 'PATCH', body });
       store.changed();
-      toast('Saved');
+      toast('Enregistré');
       nav.finish(`entry/${id}`);
     } catch (err) { msg.textContent = err.message; }
   };
   const el = h('form', { onsubmit: save },
-    bar(cancelButton(`entry/${id}`), 'Edit', h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
+    bar(cancelButton(`entry/${id}`), 'Modifier', h('button', { class: 'link-btn strong', type: 'submit' }, 'Enregistrer')),
     h('div', { class: 'details' },
       h('label', { class: 'field', for: 'f-text' }, h('span', { text: 'passage' }), text),
       fields.els,
-      e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo`, style: { alignSelf: 'flex-start' } }, 'Change the selection on the photo') : null,
+      e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo`, style: { alignSelf: 'flex-start' } }, 'Changer la sélection sur la photo') : null,
       msg,
-      h('button', { class: 'btn primary big', type: 'submit' }, 'Save')));
+      h('button', { class: 'btn primary big', type: 'submit' }, 'Enregistrer')));
   return { el, bare: !isWide(), nav: 'quotes' };
 }
 
@@ -1257,27 +1260,27 @@ async function viewEntryPhoto({ args: [id] }) {
   const photo = await api(`/api/photos/${e.photo_id}`);
   nav.label('Photo');
   const preview = h('p', { class: 'sel-preview' });
-  const saveBtn = h('button', { class: 'btn primary', type: 'button', disabled: true }, 'Use this selection');
+  const saveBtn = h('button', { class: 'btn primary', type: 'button', disabled: true }, 'Utiliser cette sélection');
   let range = null;
   const sel = makeSelector(photo, { start: e.word_start, end: e.word_end, startMode: 'photo', onChange: (r) => {
     range = r.phase === 'none' ? null : r;
-    preview.textContent = r.text || 'Tap the first word, then the last.';
+    preview.textContent = r.text || 'Touchez le premier mot, puis le dernier.';
     preview.classList.toggle('empty', !r.text);
     saveBtn.disabled = !range || (r.start === e.word_start && r.end === e.word_end);
   } });
   saveBtn.addEventListener('click', async () => {
-    const ok = await confirmDialog({ title: 'Use this selection?', text: 'The saved text is replaced by the words selected on the photo.',
-      choices: [{ label: 'Replace the text', value: true, primary: true }] });
+    const ok = await confirmDialog({ title: 'Utiliser cette sélection ?', text: 'Le texte enregistré est remplacé par les mots sélectionnés sur la photo.',
+      choices: [{ label: 'Remplacer le texte', value: true, primary: true }] });
     if (!ok) return;
     try {
       await api(`/api/entries/${id}`, { method: 'PATCH', body: { word_start: range.start, word_end: range.end } });
       store.changed();
-      toast('Selection saved');
+      toast('Sélection enregistrée');
       nav.back(`entry/${id}`);
     } catch (err) { toast(err.message); }
   });
   const el = h('div', { class: 'fill-screen' },
-    bar(backButton(`entry/${id}`, 'Quote'), e.page ? where(e) : ''),
+    bar(backButton(`entry/${id}`, 'Citation'), e.page ? where(e) : ''),
     sel.el,
     h('div', { class: 'sel-sheet' }, preview, nudgeBar(sel), saveBtn));
   return { el, bare: true, cleanup: () => sel.destroy() };
@@ -1324,15 +1327,15 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
   let zoom = 1;
 
   const photoBtn = h('button', { type: 'button', onclick: () => setMode('photo') }, 'Photo');
-  const textBtn = h('button', { type: 'button', onclick: () => setMode('text') }, 'Large text');
-  const zoomBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: toggleZoom }, icon('zoomIn', 22));
-  const modes = h('div', { class: 'sel-modes' }, h('div', { class: 'seg', role: 'group', 'aria-label': 'Select on' }, photoBtn, textBtn), zoomBtn);
+  const textBtn = h('button', { type: 'button', onclick: () => setMode('text') }, 'Grand texte');
+  const zoomBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Agrandir', onclick: toggleZoom }, icon('zoomIn', 22));
+  const modes = h('div', { class: 'sel-modes' }, h('div', { class: 'seg', role: 'group', 'aria-label': 'Sélectionner sur' }, photoBtn, textBtn), zoomBtn);
 
-  const img = h('img', { src: photo.image_url, alt: 'Photo of the page', draggable: 'false' });
+  const img = h('img', { src: photo.image_url, alt: 'Photo de la page', draggable: 'false' });
   const wordLayer = h('div', { class: 'layer', 'aria-hidden': 'true' });
   const markLayer = h('div', { class: 'layer', 'aria-hidden': 'true' });
-  const startDot = h('div', { class: 'handle start', title: 'Drag to move the start' });
-  const endDot = h('div', { class: 'handle end', title: 'Drag to move the end' });
+  const startDot = h('div', { class: 'handle start', title: 'Glisser pour déplacer le début' });
+  const endDot = h('div', { class: 'handle end', title: 'Glisser pour déplacer la fin' });
   const stage = h('div', { class: 'photo-stage' }, img, wordLayer, markLayer, startDot, endDot);
   const scroller = h('div', { class: 'photo-scroll' }, stage);
   const textPane = h('div', { class: 'text-pick' });
@@ -1478,7 +1481,7 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
   function toggleZoom() {
     zoom = zoom === 1 ? 2 : 1;
     put(zoomBtn, icon(zoom === 1 ? 'zoomIn' : 'zoomOut', 22));
-    zoomBtn.setAttribute('aria-label', zoom === 1 ? 'Zoom in' : 'Zoom out');
+    zoomBtn.setAttribute('aria-label', zoom === 1 ? 'Agrandir' : 'Réduire');
     sizeStage();
     requestAnimationFrame(() => {
       drawMarks();
@@ -1514,9 +1517,9 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
 
 function nudgeBar(sel) {
   const pair = (label, which) => h('span', { class: 'nudge' }, label,
-    h('button', { type: 'button', 'aria-label': `Move the ${which} one word back`, onclick: () => sel.nudge(which, -1) }, icon('left')),
-    h('button', { type: 'button', 'aria-label': `Move the ${which} one word on`, onclick: () => sel.nudge(which, 1) }, icon('right')));
-  return h('div', { class: 'nudges' }, pair('start', 'start'), pair('end', 'end'));
+    h('button', { type: 'button', 'aria-label': `Reculer ${which === 'start' ? 'le début' : 'la fin'} d’un mot`, onclick: () => sel.nudge(which, -1) }, icon('left')),
+    h('button', { type: 'button', 'aria-label': `Avancer ${which === 'start' ? 'le début' : 'la fin'} d’un mot`, onclick: () => sel.nudge(which, 1) }, icon('right')));
+  return h('div', { class: 'nudges' }, pair('début', 'start'), pair('fin', 'end'));
 }
 
 // ----- capture: choose what you are reading or watching, then a photo, a link or typed text -----
@@ -1609,12 +1612,12 @@ function sharedParam() {
 function sourceChoice(s, change) {
   return h('div', { class: 'book-choice' }, thumb(s),
     h('div', { class: 'main' }, h('div', { class: 't', text: s.title }), h('div', { class: 'muted' }, sourceLine(s))),
-    change ? h('button', { class: 'btn small', type: 'button', onclick: change }, 'Change') : null);
+    change ? h('button', { class: 'btn small', type: 'button', onclick: change }, 'Changer') : null);
 }
 
 async function viewCapture({ params }) {
   const [sources, people, topics] = await Promise.all([store.sources(), store.people(), store.topics()]);
-  nav.label('Capture');
+  nav.label('Ajouter');
   const root = h('div', { class: 'capture' });
   let selector = null;
   const cleanup = () => { selector?.destroy(); selector = null; };
@@ -1630,14 +1633,14 @@ async function viewCapture({ params }) {
   let sharedFromStart = false;
 
   const leave = (left) => left || cancelButton('');
-  const backTo = (fn, label = 'Back') => h('button', { class: 'link-btn', type: 'button', onclick: () => fn() }, icon('back', 20), label);
+  const backTo = (fn, label = 'Retour') => h('button', { class: 'link-btn', type: 'button', onclick: () => fn() }, icon('back', 20), label);
   const home = () => (shared ? stepShared(shared) : stepStart());
   const keepShared = (sh = shared) => { try { sessionStorage.setItem('marginote.shared', JSON.stringify(sh)); } catch { /* not kept */ } };
   const sharedCarry = () => (shared ? (keepShared(), '&shared=1') : '');
 
   // a passage and/or a link: a link goes to the page's form, a passage alone asks where it is from
   function takeShared(sh, fromStart = false) {
-    if (!sh.text && !sh.url) { stepPaste('Nothing to keep in what was shared.'); return; }
+    if (!sh.text && !sh.url) { stepPaste('Rien à garder dans ce qui a été partagé.'); return; }
     sharedFromStart = fromStart;
     if (sh.url) { keepShared(sh); stepLink(sh.url, '', sh.text, Boolean(sh.raw)); return; }
     shared = sh;
@@ -1658,34 +1661,34 @@ async function viewCapture({ params }) {
     const newRow = (ic, title, sub, onclick) => h('button', { type: 'button', class: 'pick', onclick },
       h('span', { class: 'slot small icon-slot' }, icon(ic, 26)), h('span', { class: 'main' }, h('span', { class: 't', text: title }), h('span', { class: 'a', text: sub })));
     put(root,
-      bar(leave(), 'Capture'),
+      bar(leave(), 'Ajouter'),
       h('div', { class: 'capture-start' },
-        h('h1', { class: 'ask', text: 'What are you reading or watching?' }),
-        aboutPreset?.length ? h('p', { class: 'note-line' }, `About ${aboutPreset[0].name}.`) : null,
-        topicPreset?.length ? h('p', { class: 'note-line' }, `On ${topicPreset[0]}.`) : null,
-        h('button', { class: 'btn', type: 'button', onclick: paste, style: { alignSelf: 'flex-start' } }, icon('paste', 18), 'Paste what you copied')),
-      recent.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'continue' })),
+        h('h1', { class: 'ask', text: 'Que lisez-vous ou regardez-vous ?' }),
+        aboutPreset?.length ? h('p', { class: 'note-line' }, `Sur ${aboutPreset[0].name}.`) : null,
+        topicPreset?.length ? h('p', { class: 'note-line' }, `Thème : ${topicPreset[0]}.`) : null,
+        h('button', { class: 'btn', type: 'button', onclick: paste, style: { alignSelf: 'flex-start' } }, icon('paste', 18), 'Coller ce que vous avez copié')),
+      recent.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'reprendre' })),
         recent.map((s) => h('button', { type: 'button', class: 'pick', onclick: () => { startedHere = true; stepSource(s); } }, thumb(s),
           h('span', { class: 'main' }, h('span', { class: 't', text: s.title }), h('span', { class: 'a' }, sourceLine(s))))),
-        sources.length > recent.length ? h('button', { type: 'button', class: 'more-btn', onclick: () => stepPick((s) => stepSource(s)) }, 'Something else from the library ›') : null] : null,
-      h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'something new' })),
-      newRow('book', 'Book or ebook', 'Photo of a page or a screenshot; the book from its ISBN or back cover',
+        sources.length > recent.length ? h('button', { type: 'button', class: 'more-btn', onclick: () => stepPick((s) => stepSource(s)) }, 'Autre chose de la bibliothèque ›') : null] : null,
+      h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'nouveau' })),
+      newRow('book', 'Livre ou livre numérique', 'Photo d’une page ou capture d’écran ; le livre par son ISBN ou son dos',
         () => go(`source/new?kind=book&then=capture${carry ? '&' + carry : ''}`)),
-      newRow('link', 'Link', 'Article, video or podcast: paste the link, or share it from the app', () => stepLink('')),
-      newRow('class', 'Class', 'A course you take: notes for each session, and quotes',
+      newRow('link', 'Lien', 'Article, vidéo ou podcast : collez le lien, ou partagez-le depuis l’app', () => stepLink('')),
+      newRow('class', 'Cours', 'Un cours que vous suivez : des notes par séance, et des citations',
         () => go(`source/new?kind=class&then=capture${carry ? '&' + carry : ''}`)),
-      newRow('pen', 'Something else', 'A talk, a film: type its title and who gave it',
+      newRow('pen', 'Autre chose', 'Une conférence, un film : son titre et qui l’a donné',
         () => go(`source/new?kind=talk&then=capture${carry ? '&' + carry : ''}`)),
-      newRow('said', 'Words someone said', 'Heard or read, with no source to point to', () => stepSaid('')),
-      newRow('note', 'Note', 'Your own thoughts on a person, a topic or a source', () => go(`note/new${carry ? '?' + carry.replace('about=', 'person=') : ''}`)),
+      newRow('said', 'Paroles de quelqu’un', 'Entendues ou lues, sans source précise', () => stepSaid('')),
+      newRow('note', 'Note', 'Vos propres réflexions sur une personne, un thème ou une source', () => go(`note/new${carry ? '?' + carry.replace('about=', 'person=') : ''}`)),
       h('div', { class: 'list-end' }),
       h('div', { class: 'pad' }, h('button', { class: 'btn', type: 'button', style: { alignSelf: 'flex-start' }, onclick: () => stepLater(null) },
-        icon('inbox', 18), 'Photos to sort later')));
+        icon('inbox', 18), 'Photos à trier plus tard')));
   }
 
   function stepPick(then, back) {
     cleanup();
-    const q = h('input', { type: 'search', placeholder: 'Find a source', 'aria-label': 'Find a source' });
+    const q = h('input', { type: 'search', placeholder: 'Chercher une source', 'aria-label': 'Chercher une source' });
     const list = h('div');
     const draw = () => {
       const needle = fold(q.value.trim());
@@ -1698,7 +1701,7 @@ async function viewCapture({ params }) {
     put(root,
       bar(back ? backTo(back) : source || startedHere ? backTo(() => (source ? stepSource(source) : home())) : leave(), 'Source'),
       h('div', { class: 'pad' }, h('label', { class: 'search' }, icon('search', 16), q),
-        h('a', { class: 'btn small', href: `#/source/new?then=capture${carry ? '&' + carry : ''}${sharedCarry()}`, style: { alignSelf: 'flex-start' } }, '+ New source')),
+        h('a', { class: 'btn small', href: `#/source/new?then=capture${carry ? '&' + carry : ''}${sharedCarry()}`, style: { alignSelf: 'flex-start' } }, '+ Nouvelle source')),
       list);
     setTimeout(() => q.focus(), 50);
   }
@@ -1710,8 +1713,8 @@ async function viewCapture({ params }) {
     const k = kindOf(s);
     if (!k.photos) { stepDetails(null, false, k.notesFirst ? 'note' : 'quote'); return; }
     const fileInput = (useCamera) => h('input', { type: 'file', accept: 'image/*', capture: useCamera ? 'environment' : null,
-      'aria-label': useCamera ? 'Take a photo' : 'Choose a photo', onchange: (ev) => { const f = ev.target.files[0]; if (f) send(f); } });
-    const drop = h('div', { class: 'drop wide-only' }, 'or drop a photo or a screenshot here');
+      'aria-label': useCamera ? 'Prendre une photo' : 'Choisir une photo', onchange: (ev) => { const f = ev.target.files[0]; if (f) send(f); } });
+    const drop = h('div', { class: 'drop wide-only' }, 'ou déposez ici une photo ou une capture d’écran');
     for (const t of ['dragenter', 'dragover']) drop.addEventListener(t, (ev) => { ev.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (ev) => { ev.preventDefault(); drop.classList.remove('over'); const f = ev.dataTransfer.files[0]; if (f) send(f); });
@@ -1720,14 +1723,14 @@ async function viewCapture({ params }) {
       h('div', { class: 'capture-start' },
         sourceChoice(s, () => stepPick((x) => stepSource(x))),
         root.dataset.error ? h('div', { class: 'error', role: 'alert', text: root.dataset.error }) : null,
-        k.notesFirst ? h('button', { class: 'btn primary big', type: 'button', onclick: () => stepDetails(null, false, 'note') }, icon('note', 20), 'Write a note') : null,
+        k.notesFirst ? h('button', { class: 'btn primary big', type: 'button', onclick: () => stepDetails(null, false, 'note') }, icon('note', 20), 'Écrire une note') : null,
         coarse()
-          ? [h('label', { class: `btn ${k.notesFirst ? '' : 'primary '}big file-btn` }, icon('camera', 20), 'Take a photo', fileInput(true)),
-            h('label', { class: 'btn big file-btn' }, icon('image', 20), s.kind === 'ebook' ? 'Choose a screenshot' : 'Choose a photo', fileInput(false))]
-          : [h('label', { class: `btn ${k.notesFirst ? '' : 'primary '}big file-btn` }, icon('image', 20), 'Choose a photo or a screenshot', fileInput(false)), drop],
-        h('button', { class: 'btn big', type: 'button', onclick: () => stepLater(s) }, icon('inbox', 20), 'Several pages, sort later'),
-        h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Type a quote'),
-        k.notesFirst ? null : h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null, false, 'note') }, icon('note', 20), 'Write a note')));
+          ? [h('label', { class: `btn ${k.notesFirst ? '' : 'primary '}big file-btn` }, icon('camera', 20), 'Prendre une photo', fileInput(true)),
+            h('label', { class: 'btn big file-btn' }, icon('image', 20), s.kind === 'ebook' ? 'Choisir une capture d’écran' : 'Choisir une photo', fileInput(false))]
+          : [h('label', { class: `btn ${k.notesFirst ? '' : 'primary '}big file-btn` }, icon('image', 20), 'Choisir une photo ou une capture d’écran', fileInput(false)), drop],
+        h('button', { class: 'btn big', type: 'button', onclick: () => stepLater(s) }, icon('inbox', 20), 'Plusieurs pages, à trier plus tard'),
+        h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Taper une citation'),
+        k.notesFirst ? null : h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null, false, 'note') }, icon('note', 20), 'Écrire une note')));
     delete root.dataset.error;
   }
 
@@ -1748,30 +1751,30 @@ async function viewCapture({ params }) {
           const form = new FormData();
           form.append('file', await shrinkPhoto(file));
           await api(`/api/photos?later=true${s ? `&source_id=${s.id}` : ''}`, { method: 'POST', form });
-          state.textContent = 'sent';
+          state.textContent = 'envoyée';
           count += 1;
-          counter.textContent = `${plural(count, 'page')} sent. They are read on the server; sort them from the inbox.`;
+          counter.textContent = `${plural(count, 'page')} envoyée${count > 1 ? 's' : ''}. Elles sont lues sur le serveur ; triez-les depuis « À trier ».`;
         } catch (err) { state.textContent = err.message; state.classList.add('bad'); }
       }
       busy = false;
     }
     const add = (files) => {
       for (const file of files) {
-        const row = h('div', { class: 'sent-row' }, h('img', { src: URL.createObjectURL(file), alt: '' }), h('span', { class: 'state', text: 'sending…' }));
+        const row = h('div', { class: 'sent-row' }, h('img', { src: URL.createObjectURL(file), alt: '' }), h('span', { class: 'state', text: 'envoi…' }));
         sent.prepend(row);
         queue.push({ file, row });
       }
       pump();
     };
     const input = (camera) => h('input', { type: 'file', accept: 'image/*', multiple: !camera, capture: camera ? 'environment' : null,
-      'aria-label': camera ? 'Take a photo' : 'Choose photos', onchange: (ev) => { add([...ev.target.files]); ev.target.value = ''; } });
+      'aria-label': camera ? 'Prendre une photo' : 'Choisir des photos', onchange: (ev) => { add([...ev.target.files]); ev.target.value = ''; } });
     put(root,
-      bar(s ? backTo(() => stepSource(s)) : startedHere ? backTo(home) : leave(), 'Sort later',
-        h('a', { class: 'link-btn strong', href: '#/inbox', onclick: (ev) => { ev.preventDefault(); nav.replace('inbox'); } }, 'Done')),
+      bar(s ? backTo(() => stepSource(s)) : startedHere ? backTo(home) : leave(), 'À trier plus tard',
+        h('a', { class: 'link-btn strong', href: '#/inbox', onclick: (ev) => { ev.preventDefault(); nav.replace('inbox'); } }, 'Terminé')),
       h('div', { class: 'capture-start' },
-        s ? sourceChoice(s) : h('p', { class: 'note-line', text: 'You choose the source of each page when you sort it.' }),
-        coarse() ? h('label', { class: 'btn primary big file-btn' }, icon('camera', 20), 'Take a photo', input(true)) : null,
-        h('label', { class: `btn big file-btn${coarse() ? '' : ' primary'}` }, icon('image', 20), 'Choose photos', input(false)),
+        s ? sourceChoice(s) : h('p', { class: 'note-line', text: 'Vous choisirez la source de chaque page en la triant.' }),
+        coarse() ? h('label', { class: 'btn primary big file-btn' }, icon('camera', 20), 'Prendre une photo', input(true)) : null,
+        h('label', { class: `btn big file-btn${coarse() ? '' : ' primary'}` }, icon('image', 20), 'Choisir des photos', input(false)),
         counter, sent));
   }
 
@@ -1784,16 +1787,16 @@ async function viewCapture({ params }) {
     const next = (ev) => {
       ev.preventDefault();
       const sh = parseShared(area.value);
-      if (!sh.text && !sh.url) { say.textContent = 'Paste a passage or a link.'; area.focus(); return; }
+      if (!sh.text && !sh.url) { say.textContent = 'Collez un passage ou un lien.'; area.focus(); return; }
       takeShared(sh, true);
     };
     put(root, h('form', { class: 'fill-form', onsubmit: next },
-      bar(backTo(stepStart), 'Paste'),
+      bar(backTo(stepStart), 'Coller'),
       h('div', { class: 'details' },
-        h('label', { class: 'field', for: 'p-text' }, h('span', { text: 'a passage, a link, or both' }), area),
-        h('p', { class: 'note-line', text: coarse() ? 'Touch the box, then Paste.' : 'Click the box and paste (Ctrl+V).' }),
+        h('label', { class: 'field', for: 'p-text' }, h('span', { text: 'un passage, un lien, ou les deux' }), area),
+        h('p', { class: 'note-line', text: coarse() ? 'Touchez la case, puis Coller.' : 'Cliquez dans la case et collez (Ctrl+V).' }),
         say),
-      h('div', { class: 'save-bar' }, h('button', { class: 'btn primary big', type: 'submit' }, 'Next'))));
+      h('div', { class: 'save-bar' }, h('button', { class: 'btn primary big', type: 'submit' }, 'Suivant'))));
     setTimeout(() => area.focus(), 50);
   }
 
@@ -1822,21 +1825,21 @@ async function viewCapture({ params }) {
     };
     const recent = sources.filter((s) => s !== match).slice(0, 4);
     put(root,
-      bar(sharedFromStart ? backTo(stepStart) : leave(), 'Shared'),
+      bar(sharedFromStart ? backTo(stepStart) : leave(), 'Partagé'),
       h('div', { class: 'capture-start' },
-        h('h1', { class: 'ask', text: 'Where is it from?' }),
+        h('h1', { class: 'ask', text: 'D’où vient ce passage ?' }),
         h('blockquote', { class: 'shared-text', text: shorten(sh.text, 420) })),
-      b ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'named with the passage' })),
-        match ? sourcePick(match, true) : row('book', `New ebook: ${b.title}`, b.author || 'From Apple Books', createBook)] : null,
-      recent.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'recent' })),
+      b ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'nommé avec le passage' })),
+        match ? sourcePick(match, true) : row('book', `Nouveau livre numérique : ${b.title}`, b.author || 'Depuis Apple Books', createBook)] : null,
+      recent.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'récents' })),
         recent.map((s) => sourcePick(s)),
-        sources.length > recent.length ? h('button', { type: 'button', class: 'more-btn', onclick: () => stepPick(useSource, () => stepShared(sh)) }, 'Something else from the library ›') : null] : null,
-      h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'something new' })),
-      row('link', 'A web page, a video or a podcast', 'Paste its link; the passage is kept with it', () => stepLink('', '', sh.text)),
-      row('book', 'A book, a talk, anything else', 'Type its title and who wrote it',
+        sources.length > recent.length ? h('button', { type: 'button', class: 'more-btn', onclick: () => stepPick(useSource, () => stepShared(sh)) }, 'Autre chose de la bibliothèque ›') : null] : null,
+      h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'nouveau' })),
+      row('link', 'Une page web, une vidéo ou un podcast', 'Collez son lien ; le passage y est rattaché', () => stepLink('', '', sh.text)),
+      row('book', 'Un livre, une conférence, autre chose', 'Son titre et qui l’a écrit',
         () => go(`source/new?kind=${b ? 'ebook' : 'book'}&then=capture${carry ? '&' + carry : ''}${sharedCarry()}`)),
-      row('said', 'Someone said it', 'Who said it, with no source to point to', () => stepSaid(sh.text)),
-      row('note', 'Your own note', 'Keep it as a note on a person, a topic or a source', () => go(`note/new?shared=1${carry ? '&' + carry.replace('about=', 'person=') : ''}`)),
+      row('said', 'Quelqu’un l’a dit', 'Qui l’a dit, sans source précise', () => stepSaid(sh.text)),
+      row('note', 'Votre propre note', 'La garder comme note sur une personne, un thème ou une source', () => go(`note/new?shared=1${carry ? '&' + carry.replace('about=', 'person=') : ''}`)),
       h('div', { class: 'list-end' }));
   }
 
@@ -1848,12 +1851,12 @@ async function viewCapture({ params }) {
     const text = h('textarea', { class: 'textarea', rows: 5, id: 'c-text', value: said });
     const fields = entryFields({ source: null, sources, people, topics, entry: who ? { by: who, about: [], topics: [] } : null,
       about: aboutPreset?.length ? aboutPreset : null, topicNames: topicPreset?.length ? topicPreset : null });
-    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Save');
+    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Enregistrer');
     const save = async (ev) => {
       ev.preventDefault();
-      if (!text.value.trim()) { text.focus(); toast('The words are empty'); return; }
+      if (!text.value.trim()) { text.focus(); toast('Les paroles sont vides'); return; }
       const body = { ...fields.values(), text: text.value };
-      if (!body.source_id && !body.words_by) { document.querySelector('#f-by')?.focus(); toast('Say who said it'); return; }
+      if (!body.source_id && !body.words_by) { document.querySelector('#f-by')?.focus(); toast('Dites qui l’a dit'); return; }
       saveBtn.disabled = true;
       try {
         const e = await api('/api/entries', { method: 'POST', body });
@@ -1861,13 +1864,13 @@ async function viewCapture({ params }) {
         if (shared) finishShared();
         nav.flash = { entry: e.id };
         nav.finish(e.source ? `source/${e.source.id}` : `person/${e.by.id}`);
-        toast('Saved');
+        toast('Enregistré');
       } catch (err) { saveBtn.disabled = false; toast(err.message); }
     };
     put(root, h('form', { onsubmit: save, class: 'fill-form' },
-      bar(startedHere || shared ? backTo(home) : leave(), 'Words someone said'),
+      bar(startedHere || shared ? backTo(home) : leave(), 'Paroles de quelqu’un'),
       h('div', { class: 'details' },
-        h('label', { class: 'field', for: 'c-text' }, h('span', { text: 'what was said' }), text),
+        h('label', { class: 'field', for: 'c-text' }, h('span', { text: 'ce qui a été dit' }), text),
         fields.els),
       h('div', { class: 'save-bar' }, saveBtn)));
     setTimeout(() => (who ? text : document.getElementById('f-by'))?.focus(), 50);
@@ -1876,13 +1879,13 @@ async function viewCapture({ params }) {
   async function send(file) {
     put(root, bar(leave(), source.title),
       h('div', { class: 'capture-start' }, h('div', { class: 'status-line', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }),
-        'Reading the page…')));
+        'Lecture de la page…')));
     try {
       const form = new FormData();
       form.append('file', await shrinkPhoto(file));
       photo = await api(`/api/photos?source_id=${source.id}`, { method: 'POST', form });
       capture.last = { photo, sourceId: source.id };
-      if (!photo.words.length) { root.dataset.error = 'No text found on this photo. Take it again, closer.'; stepSource(source); return; }
+      if (!photo.words.length) { root.dataset.error = 'Aucun texte trouvé sur cette photo. Reprenez-la, de plus près.'; stepSource(source); return; }
       range = null;
       stepSelect();
     } catch (err) { if (err.status !== 401) { root.dataset.error = err.message; stepSource(source); } }
@@ -1896,17 +1899,17 @@ async function viewCapture({ params }) {
         const sel = await api(`/api/photos/${photo.id}/select`, { method: 'POST', body: { start: range.start, end: range.end } });
         stepDetails(sel.text);
       } catch (err) { toast(err.message); }
-    } }, 'Next');
+    } }, 'Suivant');
     selector = makeSelector(photo, { start: range?.start, end: range?.end, onChange: (r) => {
       range = r.phase === 'none' ? null : { start: r.start, end: r.end };
-      preview.textContent = r.text || 'Tap the first word, then the last.';
+      preview.textContent = r.text || 'Touchez le premier mot, puis le dernier.';
       preview.classList.toggle('empty', !r.text);
       next.disabled = !range;
-      next.textContent = r.phase === 'none' ? 'Next' : `Next · ${plural(r.end - r.start + 1, 'word')}`;
+      next.textContent = r.phase === 'none' ? 'Suivant' : `Suivant · ${plural(r.end - r.start + 1, 'word')}`;
     } });
     put(root,
-      bar(fromInbox ? cancelButton('inbox', 'Inbox') : backTo(() => stepSource(source), 'Retake'), source.title,
-        h('button', { class: 'link-btn', type: 'button', onclick: () => stepDetails(null, true) }, 'Type')),
+      bar(fromInbox ? cancelButton('inbox', 'À trier') : backTo(() => stepSource(source), 'Reprendre'), source.title,
+        h('button', { class: 'link-btn', type: 'button', onclick: () => stepDetails(null, true) }, 'Taper')),
       selector.el,
       h('div', { class: 'sel-sheet' }, preview, nudgeBar(selector), next));
     root.classList.add('fill-screen');
@@ -1925,7 +1928,7 @@ async function viewCapture({ params }) {
     const showMode = () => { textLabel.textContent = mode === 'quote' ? 'passage' : 'note'; fields.setMode(mode); };
     const modeSeg = modeSwitch(() => mode, (x) => { mode = x; }, showMode);
     showMode();
-    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Save');
+    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Enregistrer');
     const saveNote = async () => {
       const n = await api('/api/notes', { method: 'POST', body: { ...fields.noteValues(), text: text.value } });
       store.changed();
@@ -1933,11 +1936,11 @@ async function viewCapture({ params }) {
       const sid = n.sources[0]?.id;
       nav.flash = { note: n.id };
       nav.finish(sid ? `source/${sid}` : `note/${n.id}`);
-      toast('Note saved');
+      toast('Note enregistrée');
     };
     const save = async (ev) => {
       ev.preventDefault();
-      if (!text.value.trim()) { text.focus(); toast('The text is empty'); return; }
+      if (!text.value.trim()) { text.focus(); toast('Le texte est vide'); return; }
       saveBtn.disabled = true;
       if (mode === 'note') {
         try { await saveNote(); } catch (err) { saveBtn.disabled = false; toast(err.message); }
@@ -1945,19 +1948,19 @@ async function viewCapture({ params }) {
       }
       try {
         const body = { ...fields.values(), text: text.value };
-        if (!body.source_id && !body.words_by) { saveBtn.disabled = false; toast('Say who said it'); return; }
+        if (!body.source_id && !body.words_by) { saveBtn.disabled = false; toast('Dites qui l’a dit'); return; }
         if (fromPhoto) Object.assign(body, { photo_id: photo.id, word_start: range.start, word_end: range.end });
         const e = await api('/api/entries', { method: 'POST', body });
         prefs.set('captureSource', body.source_id);
         store.changed();
         if (fromInbox) {
           nav.replace('inbox');
-          toast('Saved', { label: 'Another from this page', run: () => go(`capture?photo=${photo.id}`) });
+          toast('Enregistré', { label: 'Une autre de cette page', run: () => go(`capture?photo=${photo.id}`) });
         } else {
           if (shared) finishShared();
           nav.flash = { entry: e.id };
           nav.finish(body.source_id ? `source/${body.source_id}` : `person/${e.by.id}`);
-          toast('Saved', fromPhoto ? { label: 'Another from this page', run: () => go('capture?again=1') } : null);
+          toast('Enregistré', fromPhoto ? { label: 'Une autre de cette page', run: () => go('capture?again=1') } : null);
         }
       } catch (err) { saveBtn.disabled = false; toast(err.message); }
     };
@@ -1971,7 +1974,7 @@ async function viewCapture({ params }) {
           : () => stepPick((s) => { source = s; stepSource(s); })) : null,
         fromPhoto ? null : modeSeg,
         h('label', { class: 'field', for: 'c-text' }, textLabel, text),
-        source.url && !photo ? h('a', { class: 'filter ink', href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `open the ${source.kind === 'article' ? 'article' : source.kind} ›`) : null,
+        source.url && !photo ? h('a', { class: 'filter ink', href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `ouvrir ${kindOf(source).the} ›`) : null,
         fields.els),
       h('div', { class: 'save-bar' }, saveBtn)));
     const pageInput = document.getElementById('f-page');
@@ -1986,22 +1989,22 @@ async function viewCapture({ params }) {
     if (!url) {
       const input = h('input', { class: 'input', type: 'url', id: 'l-url', placeholder: 'https://…', autocapitalize: 'none', autocorrect: 'off', inputmode: 'url' });
       const msg = h('div', { class: 'note-line', role: 'alert' });
-      put(root, h('form', { onsubmit: (ev) => { ev.preventDefault(); if (input.value.trim()) stepLink(input.value.trim(), title, quoted); else msg.textContent = 'Paste or type a link'; } },
-        bar(startedHere || shared ? backTo(home) : leave(), 'Link'),
+      put(root, h('form', { onsubmit: (ev) => { ev.preventDefault(); if (input.value.trim()) stepLink(input.value.trim(), title, quoted); else msg.textContent = 'Collez ou tapez un lien'; } },
+        bar(startedHere || shared ? backTo(home) : leave(), 'Lien'),
         h('div', { class: 'details' },
           quoted ? h('blockquote', { class: 'shared-text', text: shorten(quoted, 300) }) : null,
-          h('label', { class: 'field', for: 'l-url' }, h('span', { text: 'link to the article, video or podcast' }), input),
+          h('label', { class: 'field', for: 'l-url' }, h('span', { text: 'lien vers l’article, la vidéo ou le podcast' }), input),
           h('div', { class: 'row-btns' },
             h('button', { class: 'btn small', type: 'button', onclick: async () => {
-              try { input.value = (await navigator.clipboard.readText()).trim(); } catch { msg.textContent = 'Pasting is not allowed here: long-press the field and choose Paste.'; }
-            } }, 'Paste')),
+              try { input.value = (await navigator.clipboard.readText()).trim(); } catch { msg.textContent = 'Coller n’est pas permis ici : appuyez longuement dans le champ et choisissez Coller.'; }
+            } }, 'Coller')),
           msg,
-          h('button', { class: 'btn primary big', type: 'submit' }, 'Next'))));
+          h('button', { class: 'btn primary big', type: 'submit' }, 'Suivant'))));
       setTimeout(() => input.focus(), 50);
       return;
     }
-    put(root, bar(leave(), 'Link'), h('div', { class: 'capture-start' },
-      h('div', { class: 'status-line', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Reading the page…')));
+    put(root, bar(leave(), 'Lien'), h('div', { class: 'capture-start' },
+      h('div', { class: 'status-line', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Lecture de la page…')));
     let info;
     try {
       info = await api('/api/lookup/link', { method: 'POST', body: { url } });
@@ -2030,10 +2033,10 @@ async function viewCapture({ params }) {
     let sourceKind = info?.kind || source?.kind;
     const text = h('textarea', { class: 'textarea', rows: 5, id: 'c-text', value: quoted || '' });
     const textLabel = h('span');
-    const title = field('l-title', 'title', { required: true }, info ? info.title || pageTitle || '' : '');
+    const title = field('l-title', 'titre', { required: true }, info ? info.title || pageTitle || '' : '');
     const site = field('l-site', 'site', {}, info?.site || '');
     const date = field('l-date', 'date', { placeholder: '2026-10-02', inputmode: 'numeric' }, info?.date || '');
-    const makersIn = peopleInput('author(s)', [], people, { id: 'l-makers' });
+    const makersIn = peopleInput('auteur(s)', [], people, { id: 'l-makers' });
     for (const name of info?.people || []) makersIn.items.push({ key: 'new:' + fold(name), label: name, value: name });
     makersIn.set(makersIn.items);
     const setKind = (k2) => {
@@ -2042,16 +2045,16 @@ async function viewCapture({ params }) {
       makersIn.el.querySelector('.label').textContent = KINDS[k2].makerLabel;
     };
     const pseudo = source || { id: 0, kind: sourceKind, people: { about: [] }, topics: [] };
-    const fields = entryFields({ source: pseudo, sources: source ? sources : [{ ...pseudo, title: 'this new source' }], people, topics, mode, place: false,
+    const fields = entryFields({ source: pseudo, sources: source ? sources : [{ ...pseudo, title: 'cette nouvelle source' }], people, topics, mode, place: false,
       about: aboutPreset?.length ? aboutPreset : null, topicNames: topicPreset?.length ? topicPreset : null });
     const showMode = () => { textLabel.textContent = mode === 'quote' ? 'passage' : 'note'; fields.setMode(mode); };
     const modeSeg = modeSwitch(() => mode, (x) => { mode = x; }, showMode);
     showMode();
-    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Save');
+    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Enregistrer');
     const save = async (ev) => {
       ev.preventDefault();
-      if (!text.value.trim()) { text.focus(); toast('The text is empty'); return; }
-      if (info && !title.input.value.trim()) { title.input.focus(); toast('Give it a title'); return; }
+      if (!text.value.trim()) { text.focus(); toast('Le texte est vide'); return; }
+      if (info && !title.input.value.trim()) { title.input.focus(); toast('Donnez-lui un titre'); return; }
       saveBtn.disabled = true;
       try {
         let sid = source?.id;
@@ -2080,16 +2083,16 @@ async function viewCapture({ params }) {
         finishShared();
         nav.flash = { ...flash, cover: info?.image_url ? sid : null };
         nav.replace(`source/${sid}`);
-        toast('Saved');
+        toast('Enregistré');
       } catch (err) { saveBtn.disabled = false; toast(err.message); }
     };
     if (info) setKind(sourceKind);
     put(root, h('form', { onsubmit: save, class: 'fill-form' },
-      bar(startedHere || shared ? backTo(home) : leave(), source ? 'In your library' : 'New source'),
+      bar(startedHere || shared ? backTo(home) : leave(), source ? 'Dans votre bibliothèque' : 'Nouvelle source'),
       h('div', { class: 'details' },
-        note ? h('div', { class: 'note-line', role: 'status', text: `${note}. Type the details in.` }) : null,
+        note ? h('div', { class: 'note-line', role: 'status', text: `${note}. Saisissez les détails.` }) : null,
         source ? sourceChoice(source) : [
-          segmented('Kind of source', [['article', 'Article'], ['video', 'Video'], ['podcast', 'Podcast']], sourceKind, setKind),
+          segmented('Type de source', [['article', 'Article'], ['video', 'Vidéo'], ['podcast', 'Podcast']], sourceKind, setKind),
           title.el,
           h('div', { class: 'two' }, h('div', { class: 'grow' }, site.el), h('div', { style: { width: '130px' } }, date.el)),
           makersIn.el,
@@ -2104,7 +2107,7 @@ async function viewCapture({ params }) {
 
   if (fromInbox) {
     photo = await api(`/api/photos/${encodeURIComponent(fromInbox)}`);
-    if (photo.status !== 'ready') { toast('This page is still being read'); nav.replace('inbox'); return null; }
+    if (photo.status !== 'ready') { toast('Cette page est encore en cours de lecture'); nav.replace('inbox'); return null; }
     source = sources.find((s) => s.id === photo.source_id);
     if (source) stepSelect();
     else stepPick(async (s) => { source = s; await api(`/api/photos/${photo.id}`, { method: 'PATCH', body: { source_id: s.id } }).catch(() => null); stepSelect(); });
@@ -2136,15 +2139,15 @@ async function viewCapture({ params }) {
 
 async function viewInbox() {
   const photos = await api('/api/photos');
-  nav.label('Inbox');
+  nav.label('À trier');
   const done = async (p) => {
     if (p.entry_count) {
       await api(`/api/photos/${p.id}`, { method: 'PATCH', body: { queued: false } }).catch((err) => toast(err.message));
       render();
       return;
     }
-    const ok = await confirmDialog({ title: 'Remove this page?', text: 'No quote was saved from it. The photo is deleted.',
-      choices: [{ label: 'Remove the photo', value: true, danger: true }] });
+    const ok = await confirmDialog({ title: 'Retirer cette page ?', text: 'Aucune citation n’en a été tirée. La photo est supprimée.',
+      choices: [{ label: 'Supprimer la photo', value: true, danger: true }] });
     if (!ok) return;
     await api(`/api/photos/${p.id}`, { method: 'DELETE' }).catch((err) => toast(err.message));
     render();
@@ -2154,24 +2157,24 @@ async function viewInbox() {
     setTimeout(() => { if (location.hash === mark) render(); }, 3000);
   }
   const el = h('div', {},
-    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Inbox', h('span', { class: 'count', text: photos.length })))),
-    photos.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'pages to sort' })),
+    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'À trier', h('span', { class: 'count', text: photos.length })))),
+    photos.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'pages à trier' })),
       photos.map((p) => h('div', { class: 'inbox-row' },
         h('img', { class: 'thumb', src: p.thumb_url, alt: '', loading: 'lazy' }),
         h('div', { class: 'main' },
-          h('span', { class: 't', text: p.source_title || 'No source yet' }),
+          h('span', { class: 't', text: p.source_title || 'Pas encore de source' }),
           h('span', { class: 'a' }, joinDots([
             p.detected_page ? `p. ${p.detected_page}` : null,
-            p.status === 'reading' ? h('i', { text: 'being read…' }) : null,
-            p.status === 'failed' ? h('i', { class: 'bad', text: 'could not be read' }) : null,
-            p.entry_count ? plural(p.entry_count, 'quote') + ' saved' : null,
+            p.status === 'reading' ? h('i', { text: 'en cours de lecture…' }) : null,
+            p.status === 'failed' ? h('i', { class: 'bad', text: 'illisible' }) : null,
+            p.entry_count ? `${plural(p.entry_count, 'quote')} enregistrée${p.entry_count > 1 ? 's' : ''}` : null,
             fullDate(p.created_at),
           ])),
           h('div', { class: 'actions' },
-            p.status === 'ready' ? h('a', { class: 'btn primary small', href: `#/capture?photo=${p.id}` }, 'Sort') : null,
-            h('button', { class: 'btn small', type: 'button', onclick: () => done(p) }, p.entry_count ? 'Done' : 'Remove…'))))),
+            p.status === 'ready' ? h('a', { class: 'btn primary small', href: `#/capture?photo=${p.id}` }, 'Trier') : null,
+            h('button', { class: 'btn small', type: 'button', onclick: () => done(p) }, p.entry_count ? 'Terminé' : 'Retirer…'))))),
       h('div', { class: 'list-end' })]
-      : h('div', { class: 'empty' }, 'Nothing to sort.', h('a', { class: 'btn', href: '#/capture' }, 'Capture')));
+      : h('div', { class: 'empty' }, 'Rien à trier.', h('a', { class: 'btn', href: '#/capture' }, 'Ajouter')));
   return { el, nav: 'inbox' };
 }
 
@@ -2180,7 +2183,7 @@ async function viewInbox() {
 async function viewSourceForm({ args: [id], params }) {
   const editing = id != null;
   const [source, sources, people, topics] = await Promise.all([editing ? api(`/api/sources/${id}`) : null, store.sources(), store.people(), store.topics()]);
-  nav.label(editing ? 'Edit' : 'New source');
+  nav.label(editing ? 'Modifier' : 'Nouvelle source');
   let kind = source?.kind || (KINDS[params.get('kind')] ? params.get('kind') : 'book');
   let coverUrl = null;
   const s = source || { people: { author: [], speaker: [], translator: [], editor: [], about: [] }, topics: [] };
@@ -2188,44 +2191,44 @@ async function viewSourceForm({ args: [id], params }) {
   const topicPreset = params.get('topic') ? topics.filter((t) => String(t.id) === params.get('topic')).map((t) => t.name) : [];
   const carry = ['about', 'topic', 'shared'].filter((k) => params.get(k)).map((k) => `&${k}=${params.get(k)}`).join('');
   const isbn = field('s-isbn', 'isbn', { inputmode: 'numeric', autocomplete: 'off' }, s.isbn);
-  const url = field('s-url', 'link', { type: 'url', inputmode: 'url', autocapitalize: 'none', autocorrect: 'off', placeholder: 'https://…' }, s.url);
-  const title = field('s-title', 'title', { required: true, autocapitalize: 'sentences' }, s.title);
-  const subtitle = field('s-subtitle', 'subtitle', {}, s.subtitle);
+  const url = field('s-url', 'lien', { type: 'url', inputmode: 'url', autocapitalize: 'none', autocorrect: 'off', placeholder: 'https://…' }, s.url);
+  const title = field('s-title', 'titre', { required: true, autocapitalize: 'sentences' }, s.title);
+  const subtitle = field('s-subtitle', 'sous-titre', {}, s.subtitle);
   const fields = [...new Set(sources.map((x) => x.field).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const fieldIn = field('s-field', 'kind of work', { list: 'fields', autocomplete: 'off', autocapitalize: 'sentences', placeholder: 'Philosophie, Roman, Histoire…' }, s.field);
-  const publisher = field('s-publisher', 'publisher', {}, s.publisher);
-  const edition = field('s-edition', 'edition', {}, s.edition);
-  const year = field('s-year', 'year', { inputmode: 'numeric' }, s.year);
+  const fieldIn = field('s-field', 'genre', { list: 'fields', autocomplete: 'off', autocapitalize: 'sentences', placeholder: 'Philosophie, Roman, Histoire…' }, s.field);
+  const publisher = field('s-publisher', 'éditeur', {}, s.publisher);
+  const edition = field('s-edition', 'édition', {}, s.edition);
+  const year = field('s-year', 'année', { inputmode: 'numeric' }, s.year);
   const date = field('s-date', 'date', { inputmode: 'numeric', placeholder: '2026-10-02' }, s.date);
-  const makersIn = peopleInput('author(s)', [...s.people.author, ...s.people.speaker], people, { id: 's-makers' });
-  const translators = peopleInput('translator(s)', s.people.translator, people, { id: 's-translators' });
-  const editors = peopleInput('editor(s)', s.people.editor, people, { id: 's-editors' });
-  const about = peopleInput('about (people)', [...s.people.about, ...aboutPreset.filter((p) => !s.people.about.some((a) => a.id === p.id))], people,
-    { id: 's-about', placeholder: 'who it is about' });
-  const topicsIn = topicsInput('topics', [...new Set([...s.topics.map((t) => t.name), ...topicPreset])], topics, { id: 's-topics' });
+  const makersIn = peopleInput('auteur(s)', [...s.people.author, ...s.people.speaker], people, { id: 's-makers' });
+  const translators = peopleInput('traducteur(s)', s.people.translator, people, { id: 's-translators' });
+  const editors = peopleInput('sous la direction de', s.people.editor, people, { id: 's-editors' });
+  const about = peopleInput('sur (personnes)', [...s.people.about, ...aboutPreset.filter((p) => !s.people.about.some((a) => a.id === p.id))], people,
+    { id: 's-about', placeholder: 'de qui il s’agit' });
+  const topicsIn = topicsInput('thèmes', [...new Set([...s.topics.map((t) => t.name), ...topicPreset])], topics, { id: 's-topics' });
   const language = h('select', { class: 'select', id: 's-language' },
-    h('option', { value: '' }, '—'), h('option', { value: 'fr' }, 'French'), h('option', { value: 'en' }, 'English'), h('option', { value: 'other' }, 'Other'));
+    h('option', { value: '' }, '—'), h('option', { value: 'fr' }, 'Français'), h('option', { value: 'en' }, 'Anglais'), h('option', { value: 'other' }, 'Autre'));
   language.value = ['fr', 'en', ''].includes(s.language || '') ? (s.language || '') : 'other';
   const msg = h('div', { class: 'note-line', role: 'status' });
-  const found = (existing) => (existing && existing.id !== s.id ? [' Already in your library: ', h('a', { class: 'plink', href: `#/source/${existing.id}`, text: existing.title })] : []);
+  const found = (existing) => (existing && existing.id !== s.id ? [' Déjà dans votre bibliothèque : ', h('a', { class: 'plink', href: `#/source/${existing.id}`, text: existing.title })] : []);
 
   const lookUp = async (prefix = '') => {
-    put(msg, `${prefix}Looking up…`);
+    put(msg, `${prefix}Recherche…`);
     try {
       const f = await api(`/api/lookup/isbn/${encodeURIComponent(isbn.input.value)}`);
       for (const [key, input] of Object.entries({ title, subtitle, publisher, year })) if (f[key]) input.input.value = f[key];
       if (f.people?.author?.length) makersIn.set(f.people.author.map((n) => ({ key: 'new:' + fold(n), label: n, value: n })));
       if (f.people?.translator?.length) translators.set(f.people.translator.map((n) => ({ key: 'new:' + fold(n), label: n, value: n })));
       if (f.language) language.value = ['fr', 'en'].includes(f.language) ? f.language : 'other';
-      put(msg, `${prefix}Found on ${f.source}.`, found(f.existing));
+      put(msg, `${prefix}Trouvé sur ${f.source}.`, found(f.existing));
     } catch (err) { put(msg, prefix + err.message); }
   };
   const readPage = async () => {
-    put(msg, 'Reading the page…');
+    put(msg, 'Lecture de la page…');
     try {
       const f = await api('/api/lookup/link', { method: 'POST', body: { url: url.input.value } });
       url.input.value = f.url;
-      if (f.note) { put(msg, `${f.note}. Type the details in.`, found(f.existing)); return; }
+      if (f.note) { put(msg, `${f.note}. Saisissez les détails.`, found(f.existing)); return; }
       if (!editing && KINDS[f.kind]) { kind = f.kind; layout(); }
       if (f.title) title.input.value = f.title;
       if (f.site) publisher.input.value = f.site;
@@ -2233,32 +2236,32 @@ async function viewSourceForm({ args: [id], params }) {
       if (f.people?.length) makersIn.set(f.people.map((n) => ({ key: 'new:' + fold(n), label: n, value: n })));
       if (f.language) language.value = ['fr', 'en'].includes(f.language) ? f.language : 'other';
       coverUrl = f.image_url;
-      put(msg, 'Details read from the page.', found(f.existing));
+      put(msg, 'Détails lus sur la page.', found(f.existing));
     } catch (err) { put(msg, err.message); }
   };
-  const backCover = h('input', { type: 'file', accept: 'image/*', capture: 'environment', 'aria-label': 'Photo of the back cover',
+  const backCover = h('input', { type: 'file', accept: 'image/*', capture: 'environment', 'aria-label': 'Photo du dos du livre',
     onchange: async (ev) => {
       const f = ev.target.files[0];
       ev.target.value = '';
       if (!f) return;
-      put(msg, 'Reading the barcode…');
+      put(msg, 'Lecture du code-barres…');
       try {
         const form = new FormData();
         form.append('file', await shrinkPhoto(f));
         const r = await api('/api/lookup/isbn-photo', { method: 'POST', form });
         isbn.input.value = r.isbn;
-        await lookUp(r.found_by === 'barcode' ? 'Barcode read. ' : 'ISBN read. ');
+        await lookUp(r.found_by === 'barcode' ? 'Code-barres lu. ' : 'ISBN lu. ');
       } catch (err) { put(msg, err.message); }
     } });
   const isbnRow = h('div', { class: 'two' }, h('div', { class: 'grow' }, isbn.el),
-    h('button', { class: 'btn small', type: 'button', onclick: () => lookUp() }, 'Look up'),
-    h('label', { class: 'btn small file-btn' }, icon('camera', 16), 'Back cover', backCover));
-  const urlRow = h('div', { class: 'two' }, h('div', { class: 'grow' }, url.el), h('button', { class: 'btn small', type: 'button', onclick: readPage }, 'Read the page'));
+    h('button', { class: 'btn small', type: 'button', onclick: () => lookUp() }, 'Chercher'),
+    h('label', { class: 'btn small file-btn' }, icon('camera', 16), 'Dos du livre', backCover));
+  const urlRow = h('div', { class: 'two' }, h('div', { class: 'grow' }, url.el), h('button', { class: 'btn small', type: 'button', onclick: readPage }, 'Lire la page'));
   const editionBox = h('div', { class: 'grow' }, edition.el);
   const bookOnly = [subtitle.el, translators.el, editors.el, editionBox];
   const yearBox = h('div', { style: { width: '110px' } }, year.el);
   const dateBox = h('div', { style: { width: '130px' } }, date.el);
-  const kindSeg = h('div', { class: 'kind-picker', role: 'group', 'aria-label': 'Kind of source' });
+  const kindSeg = h('div', { class: 'kind-picker', role: 'group', 'aria-label': 'Type de source' });
 
   function layout() {
     const k = KINDS[kind];
@@ -2288,12 +2291,12 @@ async function viewSourceForm({ args: [id], params }) {
     ev.preventDefault();
     put(msg);
     const body = payload();
-    if (body.year != null && !Number.isInteger(body.year)) { put(msg, 'The year must be a number'); return; }
+    if (body.year != null && !Number.isInteger(body.year)) { put(msg, 'L’année doit être un nombre'); return; }
     try {
       if (editing) {
         await api(`/api/sources/${id}`, { method: 'PATCH', body });
         store.changed();
-        toast('Saved');
+        toast('Enregistré');
         nav.finish(`source/${id}`);
       } else {
         const created = await api('/api/sources', { method: 'POST', body: { ...body, cover_url: coverUrl } });
@@ -2311,36 +2314,36 @@ async function viewSourceForm({ args: [id], params }) {
   if (editing) {
     const coverSlot = h('span', {}, thumb(source, 'large'));
     const coverMsg = h('div', { class: 'note-line', role: 'status' });
-    const own = h('input', { type: 'file', accept: 'image/*', 'aria-label': 'Use my own picture', onchange: async (ev) => {
+    const own = h('input', { type: 'file', accept: 'image/*', 'aria-label': 'Utiliser ma propre image', onchange: async (ev) => {
       const f = ev.target.files[0];
       if (!f) return;
-      coverMsg.textContent = 'Sending…';
+      coverMsg.textContent = 'Envoi…';
       try {
         const form = new FormData();
         form.append('file', await shrinkPhoto(f));
         const b = await api(`/api/sources/${id}/cover`, { method: 'POST', form });
         put(coverSlot, thumb(b, 'large'));
-        coverMsg.textContent = 'Picture saved.';
+        coverMsg.textContent = 'Image enregistrée.';
         store.changed();
       } catch (err) { coverMsg.textContent = err.message; }
     } });
     coverBox = h('div', { class: 'cover-box' }, coverSlot, h('div', { class: 'info' },
-      h('span', { class: 'label', text: kind === 'video' || kind === 'podcast' ? 'picture' : 'cover' }),
+      h('span', { class: 'label', text: kind === 'video' || kind === 'podcast' ? 'image' : 'couverture' }),
       h('button', { class: 'btn small', type: 'button', onclick: async () => {
-        coverMsg.textContent = 'Looking online…';
+        coverMsg.textContent = 'Recherche en ligne…';
         try {
           const b = await api(`/api/sources/${id}/cover/fetch`, { method: 'POST' });
           put(coverSlot, thumb(b, 'large'));
-          coverMsg.textContent = 'Found.';
+          coverMsg.textContent = 'Trouvée.';
           store.changed();
         } catch (err) { coverMsg.textContent = err.message; }
-      } }, 'Find online'),
-      h('label', { class: 'btn small file-btn' }, 'Use my picture', own), coverMsg));
+      } }, 'Chercher en ligne'),
+      h('label', { class: 'btn small file-btn' }, 'Utiliser mon image', own), coverMsg));
   }
 
   const el = h('form', { onsubmit: save },
     h('datalist', { id: 'fields' }, fields.map((x) => h('option', { value: x }))),
-    bar(cancelButton(editing ? `source/${id}` : ''), editing ? 'Edit' : 'New source', h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
+    bar(cancelButton(editing ? `source/${id}` : ''), editing ? 'Modifier' : 'Nouvelle source', h('button', { class: 'link-btn strong', type: 'submit' }, 'Enregistrer')),
     h('div', { class: 'details' },
       kindSeg,
       coverBox,
@@ -2351,9 +2354,9 @@ async function viewSourceForm({ args: [id], params }) {
       about.el, topicsIn.el,
       h('div', { class: 'two' }, h('div', { class: 'grow' }, publisher.el), yearBox, dateBox),
       fieldIn.el,
-      h('div', { class: 'two' }, editionBox, h('label', { class: 'field grow', for: 's-language' }, h('span', { text: 'language' }), language)),
+      h('div', { class: 'two' }, editionBox, h('label', { class: 'field grow', for: 's-language' }, h('span', { text: 'langue' }), language)),
       editors.el,
-      h('button', { class: 'btn primary big', type: 'submit' }, editing ? 'Save' : 'Add it')));
+      h('button', { class: 'btn primary big', type: 'submit' }, editing ? 'Enregistrer' : 'Ajouter')));
   if (!editing) setTimeout(() => (isbnRow.hidden ? (urlRow.hidden ? title.input : url.input) : isbn.input).focus(), 50);
   return { el, bare: !isWide(), nav: 'library' };
 }
@@ -2363,9 +2366,9 @@ async function viewSourceForm({ args: [id], params }) {
 async function viewPersonForm({ args: [id] }) {
   const [data, people] = await Promise.all([api(`/api/people/${id}`), store.people(true)]);
   const p = data.person;
-  nav.label('Edit');
-  const name = field('p-name', 'name, as usually written', { required: true }, p.name);
-  const sort = field('p-sort', 'in an index', {}, p.sort_name);
+  nav.label('Modifier');
+  const name = field('p-name', 'nom, tel qu’on l’écrit', { required: true }, p.name);
+  const sort = field('p-sort', 'dans un index', {}, p.sort_name);
   const dates = field('p-dates', 'dates', { placeholder: '1632–1677' }, p.dates);
   const aliases = h('textarea', { class: 'textarea', rows: 3, id: 'p-aliases', value: p.aliases.join('\n') });
   const msg = h('div', { class: 'note-line', role: 'alert' });
@@ -2375,7 +2378,7 @@ async function viewPersonForm({ args: [id] }) {
       await api(`/api/people/${id}`, { method: 'PATCH', body: { name: name.input.value, sort_name: sort.input.value, dates: dates.input.value,
         aliases: aliases.value.split('\n') } });
       store.changed();
-      toast('Saved');
+      toast('Enregistré');
       nav.finish(`person/${id}`);
     } catch (err) { msg.textContent = err.message; }
   };
@@ -2384,21 +2387,21 @@ async function viewPersonForm({ args: [id] }) {
     others.map((x) => h('option', { value: String(x.id) }, `${x.sort_name}${x.entries ? ` (${plural(x.entries, 'quote')})` : ''}`)));
   const merge = async () => {
     const other = others.find((x) => String(x.id) === mergeSel.value);
-    if (!other) { msg.textContent = 'Choose who this is'; return; }
-    const keep = await confirmDialog({ title: 'The same person?', text: `${p.name} and ${other.name} become one. Which name stays? The other is kept as another spelling.`,
+    if (!other) { msg.textContent = 'Choisissez de qui il s’agit'; return; }
+    const keep = await confirmDialog({ title: 'La même personne ?', text: `${p.name} et ${other.name} ne font plus qu’un. Quel nom garder ? L’autre reste comme autre graphie.`,
       choices: [{ label: other.name, value: 'other', primary: true }, { label: p.name, value: 'this' }] });
     if (!keep) return;
     try {
       const [from, into] = keep === 'other' ? [p.id, other.id] : [other.id, p.id];
       await api(`/api/people/${from}/merge`, { method: 'POST', body: { into } });
       store.changed();
-      toast('Merged');
+      toast('Fusionnées');
       nav.replace(`person/${into}`);
     } catch (err) { msg.textContent = err.message; }
   };
   const remove = async () => {
-    const ok = await confirmDialog({ title: `Remove ${p.name}?`, text: 'They are taken off every source, quote and note. Those stay.',
-      choices: [{ label: 'Remove this person', value: true, danger: true }] });
+    const ok = await confirmDialog({ title: `Retirer ${p.name} ?`, text: 'Cette personne est retirée de chaque source, citation et note, qui restent.',
+      choices: [{ label: 'Retirer cette personne', value: true, danger: true }] });
     if (!ok) return;
     try {
       await api(`/api/people/${id}`, { method: 'DELETE' });
@@ -2407,46 +2410,46 @@ async function viewPersonForm({ args: [id] }) {
     } catch (err) { msg.textContent = err.message; }
   };
   const el = h('form', { onsubmit: save },
-    bar(cancelButton(`person/${id}`), 'Edit person', h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
+    bar(cancelButton(`person/${id}`), 'Modifier la personne', h('button', { class: 'link-btn strong', type: 'submit' }, 'Enregistrer')),
     h('div', { class: 'details' },
       name.el, sort.el, dates.el,
-      h('label', { class: 'field', for: 'p-aliases' }, h('span', { text: 'other spellings, one per line' }), aliases),
+      h('label', { class: 'field', for: 'p-aliases' }, h('span', { text: 'autres graphies, une par ligne' }), aliases),
       msg,
-      h('button', { class: 'btn primary big', type: 'submit' }, 'Save'),
+      h('button', { class: 'btn primary big', type: 'submit' }, 'Enregistrer'),
       h('hr', { class: 'rule' }),
-      h('label', { class: 'field', for: 'p-merge' }, h('span', { text: 'the same person as' }), mergeSel),
-      h('button', { class: 'btn small', type: 'button', style: { alignSelf: 'flex-start' }, onclick: merge }, 'Merge…'),
-      h('button', { class: 'btn small danger', type: 'button', style: { alignSelf: 'flex-start' }, onclick: remove }, 'Remove this person…')));
+      h('label', { class: 'field', for: 'p-merge' }, h('span', { text: 'la même personne que' }), mergeSel),
+      h('button', { class: 'btn small', type: 'button', style: { alignSelf: 'flex-start' }, onclick: merge }, 'Fusionner…'),
+      h('button', { class: 'btn small danger', type: 'button', style: { alignSelf: 'flex-start' }, onclick: remove }, 'Retirer cette personne…')));
   return { el, bare: !isWide(), nav: 'library' };
 }
 
 async function viewTopicForm({ args: [id] }) {
   const data = await api(`/api/topics/${id}`);
-  nav.label('Edit');
-  const name = field('t-name', 'name', { required: true, autocapitalize: 'none' }, data.topic.name);
+  nav.label('Modifier');
+  const name = field('t-name', 'nom', { required: true, autocapitalize: 'none' }, data.topic.name);
   const msg = h('div', { class: 'note-line', role: 'alert' });
   const save = async (ev) => {
     ev.preventDefault();
     try {
       const t = await api(`/api/topics/${id}`, { method: 'PATCH', body: { name: name.input.value } });
       store.changed();
-      toast(t.id !== Number(id) ? `Merged into ${t.name}` : 'Saved');
+      toast(t.id !== Number(id) ? `Fusionné avec ${t.name}` : 'Enregistré');
       if (t.id !== Number(id)) nav.replace(`topic/${t.id}`); else nav.finish(`topic/${id}`);
     } catch (err) { msg.textContent = err.message; }
   };
   const remove = async () => {
-    const ok = await confirmDialog({ title: `Remove the topic ${data.topic.name}?`, text: 'It is taken off every quote, source and note. Those stay.',
-      choices: [{ label: 'Remove the topic', value: true, danger: true }] });
+    const ok = await confirmDialog({ title: `Retirer le thème ${data.topic.name} ?`, text: 'Il est retiré de chaque citation, source et note, qui restent.',
+      choices: [{ label: 'Retirer le thème', value: true, danger: true }] });
     if (!ok) return;
     try { await api(`/api/topics/${id}`, { method: 'DELETE' }); store.changed(); nav.replace('?view=topics'); } catch (err) { msg.textContent = err.message; }
   };
   const el = h('form', { onsubmit: save },
-    bar(cancelButton(`topic/${id}`), 'Edit topic', h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
+    bar(cancelButton(`topic/${id}`), 'Modifier le thème', h('button', { class: 'link-btn strong', type: 'submit' }, 'Enregistrer')),
     h('div', { class: 'details' }, name.el,
-      h('p', { class: 'note-line', text: 'Giving it the name of another topic merges the two.' }),
+      h('p', { class: 'note-line', text: 'Lui donner le nom d’un autre thème fusionne les deux.' }),
       msg,
-      h('button', { class: 'btn primary big', type: 'submit' }, 'Save'),
-      h('button', { class: 'btn small danger', type: 'button', style: { alignSelf: 'flex-start' }, onclick: remove }, 'Remove this topic…')));
+      h('button', { class: 'btn primary big', type: 'submit' }, 'Enregistrer'),
+      h('button', { class: 'btn small danger', type: 'button', style: { alignSelf: 'flex-start' }, onclick: remove }, 'Retirer ce thème…')));
   return { el, bare: !isWide(), nav: 'library' };
 }
 
@@ -2457,10 +2460,10 @@ async function viewNotes({ params }) {
   let notes = await api(`/api/notes${q ? `?q=${encodeURIComponent(q)}` : ''}`);
   nav.label('Notes');
   const list = h('div');
-  const input = h('input', { type: 'search', placeholder: 'Search your notes', 'aria-label': 'Search your notes', value: q, enterkeyhint: 'search' });
+  const input = h('input', { type: 'search', placeholder: 'Chercher dans vos notes', 'aria-label': 'Chercher dans vos notes', value: q, enterkeyhint: 'search' });
   const draw = () => put(list, notes.length ? [notes.map((n) => noteBlock(n)), h('div', { class: 'list-end' })]
-    : h('div', { class: 'empty' }, q ? 'No note contains these words.' : 'Your own writing goes here: on a book, a video, a class, a person or a topic.',
-      q ? null : h('a', { class: 'btn primary', href: '#/note/new' }, 'Write a note')));
+    : h('div', { class: 'empty' }, q ? 'Aucune note ne contient ces mots.' : 'Vos propres écrits viennent ici : sur un livre, une vidéo, un cours, une personne ou un thème.',
+      q ? null : h('a', { class: 'btn primary', href: '#/note/new' }, 'Écrire une note')));
   input.addEventListener('input', debounce(async () => {
     q = input.value.trim();
     history.replaceState(null, '', q ? `#/notes?q=${encodeURIComponent(q)}` : '#/notes');
@@ -2472,9 +2475,9 @@ async function viewNotes({ params }) {
   const el = h('div', {},
     h('header', { class: 'top' },
       h('div', { class: 'top-row' }, h('h1', {}, 'Notes', h('span', { class: 'count', text: notes.length })),
-        h('a', { class: 'icon-btn', href: '#/note/new', 'aria-label': 'Write a note' }, icon('plus', 22))),
+        h('a', { class: 'icon-btn', href: '#/note/new', 'aria-label': 'Écrire une note' }, icon('plus', 22))),
       h('label', { class: 'search' }, icon('search', 16), input)),
-    h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'note · most recent first' })),
+    h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'note · les plus récentes d’abord' })),
     list);
   return { el, nav: 'notes' };
 }
@@ -2483,31 +2486,31 @@ async function viewNote({ args: [id] }) {
   const n = await api(`/api/notes/${id}`);
   nav.label(shorten(n.title || 'Note', 24));
   const del = async () => {
-    const ok = await confirmDialog({ title: 'Delete this note?', text: 'This cannot be undone.', choices: [{ label: 'Delete the note', value: true, danger: true }] });
+    const ok = await confirmDialog({ title: 'Supprimer cette note ?', text: 'C’est définitif.', choices: [{ label: 'Supprimer la note', value: true, danger: true }] });
     if (!ok) return;
-    try { await api(`/api/notes/${id}`, { method: 'DELETE' }); store.changed(); toast('Note deleted'); nav.back('notes'); } catch (err) { toast(err.message); }
+    try { await api(`/api/notes/${id}`, { method: 'DELETE' }); store.changed(); toast('Note supprimée'); nav.back('notes'); } catch (err) { toast(err.message); }
   };
   const el = h('div', {},
-    bar(backButton('notes', 'Notes'), '', h('a', { class: 'link-btn', href: `#/note/${id}/edit` }, 'Edit')),
+    bar(backButton('notes', 'Notes'), '', h('a', { class: 'link-btn', href: `#/note/${id}/edit` }, 'Modifier')),
     h('article', { class: 'entry-page note-page' },
       n.title ? h('h1', { text: n.title }) : null,
-      h('div', { class: 'kv' }, joinDots([fullDate(n.created_at), n.updated_at !== n.created_at ? `changed ${fullDate(n.updated_at)}` : null])),
+      h('div', { class: 'kv' }, joinDots([fullDate(n.created_at), n.updated_at !== n.created_at ? `modifiée le ${fullDate(n.updated_at)}` : null])),
       n.sources.length ? h('div', { class: 'note-sources' }, n.sources.map((src) => h('a', { class: 'plink it', href: `#/source/${src.id}`, text: src.title })),
         n.place ? h('span', { class: 'muted', text: `, ${placeText(n.place)}` }) : null) : n.place ? h('div', { class: 'kv', text: placeText(n.place) }) : null,
       h('p', { class: 'note-body', text: n.text }),
-      n.people.length ? h('p', { class: 'kv-line' }, h('span', { class: 'label', text: 'on ' }), personLinks(n.people)) : null,
+      n.people.length ? h('p', { class: 'kv-line' }, h('span', { class: 'label', text: 'sur ' }), personLinks(n.people)) : null,
       n.topics.length ? topicLinks(n.topics) : null,
-      n.entries.length ? [h('div', { class: 'colhead flush' }, h('span', { text: 'refers to' })), n.entries.map((e) => entryRow(e, { showSource: true }))] : null,
+      n.entries.length ? [h('div', { class: 'colhead flush' }, h('span', { text: 'renvoie à' })), n.entries.map((e) => entryRow(e, { showSource: true }))] : null,
       h('div', { class: 'row-btns' },
-        h('a', { class: 'btn small', href: `#/note/${id}/edit` }, 'Edit'),
-        h('button', { class: 'btn small danger', type: 'button', onclick: del }, 'Delete…'))));
+        h('a', { class: 'btn small', href: `#/note/${id}/edit` }, 'Modifier'),
+        h('button', { class: 'btn small danger', type: 'button', onclick: del }, 'Supprimer…'))));
   return { el, nav: 'notes' };
 }
 
 async function viewNoteForm({ args: [id], params }) {
   const editing = id != null;
   const [note, people, topics, sources] = await Promise.all([editing ? api(`/api/notes/${id}`) : null, store.people(), store.topics(), store.sources()]);
-  nav.label(editing ? 'Edit' : 'New note');
+  nav.label(editing ? 'Modifier' : 'Nouvelle note');
   const n = note || { title: '', text: '', place: '', sources: [], people: [], topics: [], entries: [] };
   if (!editing) {
     const person = people.find((p) => String(p.id) === params.get('person'));
@@ -2529,17 +2532,17 @@ async function viewNoteForm({ args: [id], params }) {
     }
   }
   let linked = [...n.entries];
-  const title = field('n-title', 'title, if you want one', {}, n.title);
+  const title = field('n-title', 'titre, si vous voulez', {}, n.title);
   const text = h('textarea', { class: 'textarea note-input', rows: 10, id: 'n-text', value: n.text });
-  const sourcesIn = sourcesInput('on (a book, a video, a class…)', n.sources.map((x) => sources.find((y) => y.id === x.id) || x), sources,
+  const sourcesIn = sourcesInput('sur (un livre, une vidéo, un cours…)', n.sources.map((x) => sources.find((y) => y.id === x.id) || x), sources,
     { id: 'n-sources', onchange: (items) => { placeBox.hidden = !items.length; } });
-  const place = field('n-place', 'where in it (page, chapter, session)', { placeholder: 'Séance 3, p. 57…' }, n.place || '');
+  const place = field('n-place', 'où dedans (page, chapitre, séance)', { placeholder: 'Séance 3, p. 57…' }, n.place || '');
   const placeBox = h('div', { hidden: !n.sources.length }, place.el);
-  const peopleIn = peopleInput('people', n.people, people, { id: 'n-people', placeholder: 'who it is about' });
-  const topicsIn = topicsInput('topics', n.topics.map((t) => t.name), topics, { id: 'n-topics' });
+  const peopleIn = peopleInput('people', n.people, people, { id: 'n-people', placeholder: 'de qui il s’agit' });
+  const topicsIn = topicsInput('thèmes', n.topics.map((t) => t.name), topics, { id: 'n-topics' });
   const linkedBox = h('div');
   const finder = h('div', { class: 'finder', hidden: true });
-  const findInput = h('input', { type: 'search', placeholder: 'Words of the quote, its source, a person', 'aria-label': 'Find a quote' });
+  const findInput = h('input', { type: 'search', placeholder: 'Mots de la citation, sa source, une personne', 'aria-label': 'Chercher une citation' });
   const found = h('div');
   findInput.addEventListener('input', debounce(async () => {
     const q = findInput.value.trim();
@@ -2555,26 +2558,26 @@ async function viewNoteForm({ args: [id], params }) {
   function drawLinked() {
     put(linkedBox, linked.map((e) => h('div', { class: 'linked-row' },
       h('span', { class: 'main' }, h('span', { class: 'txt2', text: shorten(e.text, 110) }), h('span', { class: 'a', text: citation(e, e.source) })),
-      h('button', { type: 'button', class: 'x', 'aria-label': 'Remove this reference', onclick: () => { linked = linked.filter((x) => x !== e); drawLinked(); } }, '×'))));
+      h('button', { type: 'button', class: 'x', 'aria-label': 'Retirer ce renvoi', onclick: () => { linked = linked.filter((x) => x !== e); drawLinked(); } }, '×'))));
   }
   drawLinked();
   const msg = h('div', { class: 'note-line', role: 'alert' });
   const save = async (ev) => {
     ev.preventDefault();
-    if (!text.value.trim()) { text.focus(); msg.textContent = 'The note is empty'; return; }
+    if (!text.value.trim()) { text.focus(); msg.textContent = 'La note est vide'; return; }
     const body = { title: title.input.value, text: text.value, sources: sourcesIn.value, place: sourcesIn.value.length ? place.input.value : '',
       people: peopleIn.value, topics: topicsIn.value, entries: linked.map((e) => e.id) };
     try {
       if (editing) {
         await api(`/api/notes/${id}`, { method: 'PATCH', body });
         store.changed();
-        toast('Saved');
+        toast('Enregistré');
         nav.finish(`note/${id}`);
       } else {
         const created = await api('/api/notes', { method: 'POST', body });
         store.changed();
         if (params.get('shared')) finishShared();
-        toast('Note saved');
+        toast('Note enregistrée');
         if (params.get('source')) nav.flash = { note: created.id };
         if (nav.prev() && (params.get('person') || params.get('topic') || params.get('entry') || params.get('source'))) nav.back(`note/${created.id}`);
         else nav.replace(`note/${created.id}`);
@@ -2582,18 +2585,18 @@ async function viewNoteForm({ args: [id], params }) {
     } catch (err) { msg.textContent = err.message; }
   };
   const el = h('form', { onsubmit: save },
-    bar(cancelButton(editing ? `note/${id}` : 'notes'), editing ? 'Edit note' : 'New note', h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
+    bar(cancelButton(editing ? `note/${id}` : 'notes'), editing ? 'Modifier la note' : 'Nouvelle note', h('button', { class: 'link-btn strong', type: 'submit' }, 'Enregistrer')),
     h('div', { class: 'details' },
       title.el,
       h('label', { class: 'field', for: 'n-text' }, h('span', { text: 'note' }), text),
       sourcesIn.el, placeBox,
       topicsIn.el, peopleIn.el,
-      h('div', { class: 'field' }, h('span', { class: 'label', text: 'refers to (optional)' }), linkedBox,
+      h('div', { class: 'field' }, h('span', { class: 'label', text: 'renvoie à (facultatif)' }), linkedBox,
         h('button', { type: 'button', class: 'btn small', style: { alignSelf: 'flex-start', marginTop: '6px' },
-          onclick: () => { finder.hidden = !finder.hidden; if (!finder.hidden) findInput.focus(); } }, '+ Link a quote'), finder),
-      h('p', { class: 'note-line', text: 'Shown on the page of each source, person and topic it is on.' }),
+          onclick: () => { finder.hidden = !finder.hidden; if (!finder.hidden) findInput.focus(); } }, '+ Lier une citation'), finder),
+      h('p', { class: 'note-line', text: 'Affichée sur la page de chaque source, personne et thème concernés.' }),
       msg,
-      h('button', { class: 'btn primary big', type: 'submit' }, 'Save')));
+      h('button', { class: 'btn primary big', type: 'submit' }, 'Enregistrer')));
   if (!editing) setTimeout(() => text.focus(), 50);
   return { el, bare: !isWide(), nav: 'notes' };
 }
@@ -2611,65 +2614,65 @@ function shareAddress() { return `${location.origin}/#/capture?share=`; }
 
 async function viewSettings() {
   const [health, backups] = await Promise.all([api('/api/health'), api('/api/backup/status')]);
-  nav.label('Settings');
+  nav.label('Réglages');
   const backupMsg = h('span', { class: 'note-line', role: 'status' });
   const daily = backups.copies.filter((c) => c.kind === 'daily');
   const upgrades = backups.copies.filter((c) => c.kind === 'before upgrade');
   const table = (rows) => h('table', { class: 'grid settings' }, h('tbody', {}, rows.map(([k, v]) => h('tr', {}, h('td', { text: k }), h('td', { class: 'm', text: v })))));
   const copyBtn = (text, label) => h('button', { class: 'btn small', type: 'button', style: { alignSelf: 'flex-start' }, onclick: async () => {
-    try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Copying is not allowed here: select the text and copy it'); }
+    try { await navigator.clipboard.writeText(text); toast('Copié'); } catch { toast('Copier n’est pas permis ici : sélectionnez le texte et copiez-le'); }
   } }, label);
   const steps = (items) => h('ol', { class: 'steps' }, items.map((i) => h('li', {}, i)));
   const el = h('div', {},
-    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Settings'))),
+    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Réglages'))),
     h('div', { class: 'pad settings-page' },
-      h('h2', { class: 'section-title', text: 'Backups' }),
+      h('h2', { class: 'section-title', text: 'Sauvegardes' }),
       table([
-        ['Last copy', daily[0] ? dateTime(daily[0].written_at) : 'none yet'],
-        ['Copies kept', `${daily.length}: the last ${backups.kept} days, and the first of each of the last ${backups.monthly} months`],
-        ['Next copy', dateTime(backups.next)],
-        ['Before upgrades', upgrades.length ? upgrades.map((c) => c.file).join(', ') : 'none'],
+        ['Dernière copie', daily[0] ? dateTime(daily[0].written_at) : 'aucune pour l’instant'],
+        ['Copies gardées', `${daily.length} : les ${backups.kept} derniers jours, et la première de chacun des ${backups.monthly} derniers mois`],
+        ['Prochaine copie', dateTime(backups.next)],
+        ['Avant les mises à jour', upgrades.length ? upgrades.map((c) => c.file).join(', ') : 'aucune'],
       ]),
-      h('p', { class: 'note-line', text: 'Copies of the database are zips in data/backups on the NAS. Photos and covers are plain files: your NAS snapshots keep them.' }),
+      h('p', { class: 'note-line', text: 'Les copies de la base sont des zips dans data/backups sur le NAS. Photos et couvertures sont des fichiers ordinaires : les instantanés de votre NAS les gardent.' }),
       h('div', { class: 'row-btns' },
         h('button', { class: 'btn small', type: 'button', onclick: async () => {
-          try { await api('/api/backup', { method: 'POST' }); toast('Copy made'); render(); } catch (err) { backupMsg.textContent = err.message; }
-        } }, 'Back up now'),
-        h('a', { class: 'btn small', href: '/api/backup/download', download: '' }, 'Download everything (.zip)')),
+          try { await api('/api/backup', { method: 'POST' }); toast('Copie faite'); render(); } catch (err) { backupMsg.textContent = err.message; }
+        } }, 'Sauvegarder maintenant'),
+        h('a', { class: 'btn small', href: '/api/backup/download', download: '' }, 'Tout télécharger (.zip)')),
       backupMsg,
-      h('h2', { class: 'section-title', text: 'Space used' }),
+      h('h2', { class: 'section-title', text: 'Espace utilisé' }),
       table([
-        ['Database', size(backups.database_bytes)],
-        ['Page photos', `${backups.photos.count} · ${size(backups.photos.bytes)}`],
-        ['Covers and pictures', `${backups.covers.count} · ${size(backups.covers.bytes)}`],
-        ['Backups', `${backups.backups.count} · ${size(backups.backups.bytes)}`],
+        ['Base de données', size(backups.database_bytes)],
+        ['Photos de pages', `${backups.photos.count} · ${size(backups.photos.bytes)}`],
+        ['Couvertures et images', `${backups.covers.count} · ${size(backups.covers.bytes)}`],
+        ['Sauvegardes', `${backups.backups.count} · ${size(backups.backups.bytes)}`],
       ]),
-      h('h2', { class: 'section-title', text: 'Sending from other apps' }),
-      h('h3', { class: 'sub-title', text: 'On a computer: a bookmark' }),
-      h('p', {}, 'Drag this button to your bookmarks bar, once. Then select text on any page and click the bookmark: the page opens here, with the passage, its link and its title filled in.'),
-      h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Drag it to the bookmarks bar'); } }, '→ Marginote'),
-      h('h3', { class: 'sub-title', text: 'On the iPhone: « Marginote » in every app’s Share menu' }),
-      h('p', {}, 'A shortcut made once in Apple’s Shortcuts app (Raccourcis). Then select text in any app (Safari, Notes, Mail, Books, a PDF…), tap Partager, then Marginote: this app opens with the passage and asks where it is from. A link shared on its own (YouTube, Podcasts, an article) opens its form here.'),
+      h('h2', { class: 'section-title', text: 'Envoyer depuis d’autres apps' }),
+      h('h3', { class: 'sub-title', text: 'Sur un ordinateur : un favori' }),
+      h('p', {}, 'Faites glisser ce bouton dans votre barre de favoris, une fois. Ensuite, sélectionnez du texte sur n’importe quelle page et cliquez sur le favori : la page s’ouvre ici, avec le passage, son lien et son titre déjà remplis.'),
+      h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Faites-le glisser dans la barre des favoris'); } }, '→ Marginote'),
+      h('h3', { class: 'sub-title', text: 'Sur l’iPhone : « Marginote » dans le menu Partager de toutes les apps' }),
+      h('p', {}, 'Un raccourci, créé une fois dans l’app Raccourcis. Ensuite, sélectionnez du texte dans n’importe quelle app (Safari, Notes, Mail, Livres, un PDF…), touchez Partager, puis Marginote : l’app s’ouvre avec le passage et vous demande d’où il vient. Un lien partagé seul (YouTube, Podcasts, un article) ouvre ici son formulaire.'),
       steps([
-        'In Raccourcis, tap + (top right). Tap the name at the top, « Renommer », and type Marginote.',
-        'Tap ⓘ (at the bottom, or in the menu under the name) and turn on « Dans la feuille de partage » (« Afficher dans la feuille de partage » on older iPhones), then OK. A first line appears: « Recevoir … ». Tap the blue word after « Recevoir », tap « Effacer », tick only « Texte » and « URL », then OK.',
-        'Add the action « Texte » (search box at the bottom). Touch inside its box and tap « Entrée du raccourci » in the bar above the keyboard.',
-        'Add the action that encodes text for an address: search « encod » and choose « Encoder l’URL » (it may be worded slightly differently). It takes the Texte above by itself; leave it on « Encoder ».',
-        'Add the action « URL ». Paste the address below in its box, then, right after it with no space, tap the result of the encoding step in the bar above the keyboard.',
-        'Add the action « Ouvrir les URL », then OK (top right).',
+        'Dans Raccourcis, touchez + (en haut à droite). Touchez le nom en haut, « Renommer », et tapez Marginote.',
+        'Touchez ⓘ (en bas, ou dans le menu sous le nom) et activez « Dans la feuille de partage » (« Afficher dans la feuille de partage » sur les iPhone plus anciens), puis OK. Une première ligne apparaît : « Recevoir … ». Touchez le mot bleu après « Recevoir », touchez « Effacer », cochez seulement « Texte » et « URL », puis OK.',
+        'Ajoutez l’action « Texte » (champ de recherche en bas). Touchez l’intérieur de son cadre, puis « Entrée du raccourci » dans la barre au-dessus du clavier.',
+        'Ajoutez l’action qui encode le texte pour une adresse : cherchez « encod » et choisissez « Encoder l’URL » (le nom peut varier un peu). Elle prend toute seule le Texte du dessus ; laissez-la sur « Encoder ».',
+        'Ajoutez l’action « URL ». Collez l’adresse ci-dessous dans son cadre puis, juste après, sans espace, touchez le résultat de l’étape d’encodage dans la barre au-dessus du clavier.',
+        'Ajoutez l’action « Ouvrir les URL », puis OK (en haut à droite).',
       ]),
       h('pre', { class: 'code', text: shareAddress() }),
-      copyBtn(shareAddress(), 'Copy the address'),
-      h('p', { class: 'note-line', text: 'Done when: in Notes, you select a sentence, tap Partager (behind › in the small menu if needed), scroll down to Marginote, and this app opens on « Where is it from? » with your sentence. The first time, iOS asks whether the shortcut may open the address: Autoriser.' }),
-      h('p', { class: 'note-line', text: 'It opens in Safari: log in there once (the app on the Home Screen keeps its own login), with Tailscale on. To find Marginote at the top of the Share menu: « Modifier les actions… » at its bottom, then add it to Favoris.' }),
-      h('p', { class: 'note-line', text: 'An app without Partager in its menu (Kindle): Copy the passage, then here, Capture › Paste what you copied.' }),
-      h('h2', { class: 'section-title', text: 'App' }),
+      copyBtn(shareAddress(), 'Copier l’adresse'),
+      h('p', { class: 'note-line', text: 'C’est bon quand : dans Notes, vous sélectionnez une phrase, touchez Partager (derrière › dans le petit menu si besoin), faites défiler jusqu’à Marginote, et l’app s’ouvre sur « D’où vient ce passage ? » avec votre phrase. La première fois, iOS demande si le raccourci peut ouvrir l’adresse : Autoriser.' }),
+      h('p', { class: 'note-line', text: 'Il s’ouvre dans Safari : connectez-vous-y une fois (l’app de l’écran d’accueil garde sa propre connexion), avec Tailscale activé. Pour avoir Marginote en haut du menu Partager : « Modifier les actions… » tout en bas, puis ajoutez-le aux Favoris.' }),
+      h('p', { class: 'note-line', text: 'Une app sans Partager dans son menu (Kindle) : copiez le passage, puis ici, Ajouter › Coller ce que vous avez copié.' }),
+      h('h2', { class: 'section-title', text: 'Application' }),
       table([
         ['Version', health.version],
-        ['Text recognition', health.tesseract ? `Tesseract ${health.tesseract} (${health.ocr_languages.join(', ')})` : 'missing'],
-        ['Page straightening', health.straighten_pages ? 'on' : 'off'],
-        ['Barcode reader', health.barcode_reader ? 'on' : 'off'],
-        ['Online lookups', health.lookups_enabled ? 'on' : 'off'],
+        ['Reconnaissance du texte', health.tesseract ? `Tesseract ${health.tesseract} (${health.ocr_languages.join(', ')})` : 'absente'],
+        ['Redressement des pages', health.straighten_pages ? 'activé' : 'désactivé'],
+        ['Lecteur de code-barres', health.barcode_reader ? 'activé' : 'désactivé'],
+        ['Recherches en ligne', health.lookups_enabled ? 'activé' : 'désactivé'],
       ]),
       h('div', { class: 'row-btns' },
         h('a', { class: 'btn small', href: '/docs', target: '_blank', rel: 'noopener' }, 'API'),
@@ -2677,7 +2680,7 @@ async function viewSettings() {
           await api('/api/logout', { method: 'POST' }).catch(() => null);
           store.changed();
           nav.replace('login');
-        } }, 'Log out'))));
+        } }, 'Se déconnecter'))));
   return { el, nav: 'settings' };
 }
 
@@ -2687,16 +2690,16 @@ function buildShell() {
   const link = (navKey, href, label, cls = '') => h('a', { href, class: cls, dataset: { nav: navKey } }, label);
   const side = h('aside', { class: 'side' },
     h('a', { href: '#/', class: 'brand' }, 'Marginote'),
-    h('a', { class: 'btn primary', href: '#/capture' }, '+ Capture'),
-    h('nav', { 'aria-label': 'Main' },
-      link('library', '#/', 'Library'),
-      h('div', { class: 'sub' }, link('lib-sources', '#/?view=sources', 'Sources'), link('lib-people', '#/?view=people', 'People'),
-        link('lib-topics', '#/?view=topics', 'Topics')),
-      link('quotes', '#/quotes', 'Quotes'), link('notes', '#/notes', 'Notes'),
-      link('inbox', '#/inbox', 'Inbox'), link('settings', '#/settings', 'Settings')));
-  const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Main' },
-    link('library', '#/', 'Library'), link('quotes', '#/quotes', 'Quotes'), link('notes', '#/notes', 'Notes'),
-    h('span', { class: 'tab-capture' }, h('a', { class: 'btn primary', href: '#/capture' }, '+ Capture')));
+    h('a', { class: 'btn primary', href: '#/capture' }, '+ Ajouter'),
+    h('nav', { 'aria-label': 'Principal' },
+      link('library', '#/', 'Bibliothèque'),
+      h('div', { class: 'sub' }, link('lib-sources', '#/?view=sources', 'Sources'), link('lib-people', '#/?view=people', 'Personnes'),
+        link('lib-topics', '#/?view=topics', 'Thèmes')),
+      link('quotes', '#/quotes', 'Citations'), link('notes', '#/notes', 'Notes'),
+      link('inbox', '#/inbox', 'À trier'), link('settings', '#/settings', 'Réglages')));
+  const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Principal' },
+    link('library', '#/', 'Bibliothèque'), link('quotes', '#/quotes', 'Citations'), link('notes', '#/notes', 'Notes'),
+    h('span', { class: 'tab-capture' }, h('a', { class: 'btn primary', href: '#/capture' }, '+ Ajouter')));
   const main = h('main', { class: 'view', id: 'view' });
   put(document.body, h('div', { class: 'app', id: 'app' }, side, main, tabbar));
 }
@@ -2756,7 +2759,7 @@ async function render() {
     window.scrollTo(0, 0);
   } catch (err) {
     if (n !== renderCount || err.status === 401) return;
-    put(view, h('div', {}, bar(backButton('', 'Library'), ''), errorBox(err, render)));
+    put(view, h('div', {}, bar(backButton('', 'Bibliothèque'), ''), errorBox(err, render)));
   }
 }
 

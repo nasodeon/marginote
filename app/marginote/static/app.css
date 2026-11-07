@@ -70,11 +70,11 @@ button { cursor: pointer; }
   padding-bottom: env(safe-area-inset-bottom);
 }
 .tabbar > a {
-  flex: 1; height: var(--tabbar-h); display: flex; align-items: center; justify-content: center;
-  font-variant-caps: all-small-caps; letter-spacing: 0.05em; font-size: 17px; color: var(--grey); text-decoration: none;
+  flex: 1 1 auto; min-width: 0; padding: 0 6px; height: var(--tabbar-h); display: flex; align-items: center; justify-content: center;
+  font-variant-caps: all-small-caps; letter-spacing: 0.03em; font-size: 16px; color: var(--grey); text-decoration: none; white-space: nowrap;
 }
 .tabbar > a.on { color: var(--ink); font-weight: 700; }
-.tabbar .tab-capture { flex: 1; display: flex; align-items: center; justify-content: center; }
+.tabbar .tab-capture { flex: 0 0 auto; padding: 0 10px 0 4px; display: flex; align-items: center; justify-content: center; }
 .tabbar .tab-capture .btn { min-height: 38px; padding: 0 12px; font-size: 16px; }
 
 /* ---------- buttons and fields ---------- */

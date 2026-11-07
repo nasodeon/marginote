@@ -1,7 +1,7 @@
 {
   "name": "Marginote",
   "short_name": "Marginote",
-  "description": "Quotes and notes on what you read, watch and listen to",
+  "description": "Citations et notes sur ce que vous lisez, regardez et écoutez", "lang": "fr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -39,7 +39,7 @@ source author's unless you name someone else (a quote within a quote).
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
-  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.6.0`)
+  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.6.1`)
 
 ## Install
 
