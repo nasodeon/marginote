@@ -15,8 +15,9 @@ services:
     container_name: marginote-ts
     hostname: marginote
     environment:
-      - TS_AUTHKEY=tskey-auth-CHANGE-ME          # 1. your Tailscale auth key (only used on first start; can be blanked after)
-      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_AUTHKEY=tskey-auth-CHANGE-ME          # 1. your Tailscale auth key
+      - TS_AUTH_ONCE=true                        # use the key only to join the first time, not on every restart
+      - TS_STATE_DIR=/var/lib/tailscale          # where the sign-in is kept (the tailscale folder below)
       - TS_SERVE_CONFIG=/config/serve.json
       - TS_ACCEPT_DNS=false
     volumes:
