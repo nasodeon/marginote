@@ -50,6 +50,8 @@ const ICONS = {
   note: 'M6 3h9l4 4v14H6zM15 3v4h4M9 11h7M9 14h7M9 17h4',
   external: 'M9 5h10v10M19 5 7 17',
   paste: 'M9 3h6v4H9zM8 5H5v16h14V5h-3',
+  class: 'M3 4h18v12H3zM9 20l2-4M15 20l-2-4M7 8h7M7 11h4',
+  said: 'M4 5h16v11h-9l-5 4v-4H4z',
   inbox: 'M4 13h4l2 3h4l2-3h4M4 13l2-8h12l2 8v6H4z',
 };
 function icon(name, size = 18) {
@@ -87,11 +89,10 @@ function size(bytes) {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }
 const fold = (s) => (s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
-const WORDS = { entry: 'entries', copy: 'copies', person: 'people', other: 'other' };
+const WORDS = { entry: 'entries', copy: 'copies', person: 'people', other: 'other', class: 'classes' };
 const plural = (n, word) => `${n} ${n === 1 ? word : WORDS[word] || word + 's'}`;
 const isWide = () => window.matchMedia('(min-width: 960px)').matches;
 const coarse = () => window.matchMedia('(pointer: coarse)').matches;
-const kindName = (kind) => (kind === 'quote' ? 'quote' : 'comment');
 const shorten = (text, n) => (text && text.length > n ? text.slice(0, n - 1).trimEnd() + '…' : text || '');
 const surname = (p) => (p.sort_name || p.name).split(',')[0];
 const joinDots = (parts) => parts.filter(Boolean).flatMap((x, k) => (k ? [' · ', x] : [x]));
@@ -111,13 +112,15 @@ function debounce(fn, ms) {
 }
 
 // What each kind of source is called, what it is made by, and how to say where in it a passage is.
+// notesFirst: mostly your own notes on it (a video, a class), so capture starts on Note and its page shows them first.
 const KINDS = {
   book: { name: 'Book', several: 'books', maker: 'author', makerLabel: 'author(s)', publisher: 'publisher', where: 'page', photos: true },
   ebook: { name: 'Ebook', several: 'ebooks', maker: 'author', makerLabel: 'author(s)', publisher: 'publisher', where: 'page or chapter', photos: true },
   article: { name: 'Article', several: 'articles', maker: 'author', makerLabel: 'author(s)', publisher: 'site', where: null, link: true, dated: true },
-  video: { name: 'Video', several: 'videos', maker: 'speaker', makerLabel: 'who speaks', publisher: 'channel', where: null, link: true, dated: true },
-  podcast: { name: 'Podcast', several: 'podcasts', maker: 'speaker', makerLabel: 'who speaks', publisher: 'show', where: null, link: true, dated: true },
-  talk: { name: 'Talk or class', several: 'talks', maker: 'speaker', makerLabel: 'who speaks', publisher: 'event or place', where: 'slide or part', photos: true, dated: true },
+  video: { name: 'Video', several: 'videos', maker: 'speaker', makerLabel: 'who speaks', publisher: 'channel', where: null, link: true, dated: true, notesFirst: true },
+  podcast: { name: 'Podcast', several: 'podcasts', maker: 'speaker', makerLabel: 'who speaks', publisher: 'show', where: null, link: true, dated: true, notesFirst: true },
+  class: { name: 'Class', several: 'classes', maker: 'speaker', makerLabel: 'teacher(s)', publisher: 'school or university', where: 'session', photos: true, notesFirst: true },
+  talk: { name: 'Talk', several: 'talks', maker: 'speaker', makerLabel: 'who speaks', publisher: 'event or place', where: 'slide or part', photos: true, dated: true },
   other: { name: 'Other', several: 'other', maker: 'author', makerLabel: 'by', publisher: 'publisher or place', where: 'where', photos: true },
 };
 const kindOf = (s) => KINDS[s?.kind] || KINDS.book;
@@ -262,15 +265,16 @@ function topicLinks(list) {
 }
 
 function sourceLine(s) {
-  // 'book · Frédéric Lordon' / 'video · Philosophie à voix haute'
+  // 'book · Frédéric Lordon' / 'video · Philosophie à voix haute' / 'class · Jeanne Dupont · 2026'
   const who = makers(s).map((p) => p.name).join(', ');
-  return joinDots([h('span', { class: 'sc', text: s.kind }), who || s.publisher || null, s.field ? h('i', { text: s.field }) : null]);
+  return joinDots([h('span', { class: 'sc', text: s.kind }), who || s.publisher || null, s.kind === 'class' && s.year ? String(s.year) : null,
+    s.field ? h('i', { text: s.field }) : null]);
 }
 
 function sourceRow(s, { count = true, href = `#/source/${s.id}` } = {}) {
   return h('a', { class: 'book-row', href }, thumb(s),
     h('span', { class: 'main' }, h('span', { class: 't', text: s.title }), h('span', { class: 'a' }, sourceLine(s))),
-    count ? h('span', { class: 'num w40', text: s.entry_count }) : null);
+    count ? h('span', { class: 'num w40', text: (s.quote_count || 0) + (s.note_count || 0) }) : null);
 }
 
 function withMarks(text) {
@@ -286,27 +290,33 @@ function withMarks(text) {
 // the small grey line under an entry: what is not already obvious on the page it is shown on
 function entryMeta(e, { showSource = false, source = null, person = null } = {}) {
   const bits = [];
-  if (showSource) bits.push(h('i', { text: shorten(e.source.title, 48) }));
-  if (e.words_by && e.words_by.id !== person) bits.push(h('span', { class: 'sc ink', text: `${surname(e.words_by)}, quoted` }));
-  if (e.kind === 'comment') bits.push(h('span', { class: 'sc', text: 'comment' }));
+  if (!e.source) {
+    // words someone said: who (unless on their page) and where or when
+    bits.push(h('span', { class: 'sc ink', text: e.by && e.by.id !== person ? `${surname(e.by)}, said` : 'said' }));
+    if (e.page) bits.push(h('i', { text: shorten(e.page, 48) }));
+  } else {
+    if (showSource) bits.push(h('i', { text: shorten(e.source.title, 48) }));
+    if (e.words_by && e.words_by.id !== person) bits.push(h('span', { class: 'sc ink', text: `${surname(e.words_by)}, quoted` }));
+  }
   const about = e.about.filter((p) => p.id !== person && !(source && p.from_source));
   if (about.length) bits.push('about ' + about.map((p) => surname(p)).join(', '));
-  if (e.note) bits.push('note');
+  if (e.note) bits.push('comment');
   const topics = e.topics.filter((t) => !(source && t.from_source));
   if (topics.length) bits.push(h('span', { class: 'tg', text: topics.map((t) => t.name).join(' ') }));
   return joinDots(bits);
 }
 
 function where(e) {
-  if (!e.page) return '';
-  return /^\d/.test(e.page) || /^[ivxlcdm]+$/i.test(e.page) ? `p. ${e.page}` : e.page;
+  if (!e.page || !e.source) return '';
+  return placeText(e.page);
 }
+const placeText = (place) => (!place ? '' : /^\d/.test(place) || /^[ivxlcdm]+$/i.test(place) ? `p. ${place}` : place);
 
 function entryRow(e, opts = {}) {
   const meta = entryMeta(e, opts);
-  return h('a', { class: `entry-row${e.kind === 'comment' ? ' comment' : ''}${opts.fresh ? ' fresh' : ''}${opts.mark ? ' marked' : ''}`,
+  return h('a', { class: `entry-row${opts.fresh ? ' fresh' : ''}${opts.mark ? ' marked' : ''}`,
     href: `#/entry/${e.id}`, id: `e${e.id}` },
-  h('span', { class: 'pg', text: e.page || '' }),
+  h('span', { class: 'pg', text: e.source ? e.page || '' : '' }),
   h('div', { class: 'body' },
     h('p', { class: 'txt' }, e.snippet ? withMarks(e.snippet) : e.text),
     meta.length ? h('span', { class: 'meta' }, meta) : null));
@@ -314,16 +324,18 @@ function entryRow(e, opts = {}) {
 
 function entryTable(entries, { showSource = true, fresh = null } = {}) {
   const rows = entries.map((e) => h('tr', { class: e.id === fresh ? 'fresh' : '', id: `e${e.id}`, onclick: () => go(`entry/${e.id}`) },
-    h('td', { class: 'm', text: e.page || '' }),
-    h('td', { class: e.kind === 'comment' ? 'comment' : '' }, e.snippet ? withMarks(e.snippet) : e.text,
-      e.words_by ? h('span', { class: 'sub sc', text: `${surname(e.words_by)}, quoted` }) : null),
-    showSource ? h('td', { class: 'it', text: e.source.title }) : null,
+    h('td', { class: 'm', text: e.source ? e.page || '' : '' }),
+    h('td', {}, e.snippet ? withMarks(e.snippet) : e.text,
+      e.source && e.words_by ? h('span', { class: 'sub sc', text: `${surname(e.words_by)}, quoted` }) : null,
+      e.note ? h('span', { class: 'sub', text: shorten(e.note, 90) }) : null),
+    showSource ? h('td', { class: 'it' }, e.source ? e.source.title : [h('span', { class: 'sc', text: 'said ' }), e.by?.name || '',
+      e.page ? `, ${e.page}` : '']) : null,
     h('td', { class: 'tags', text: e.topics.map((t) => t.name).join(' ') }),
     h('td', { class: 'm', text: fullDate(e.created_at) })));
   return h('div', { class: 'table-wrap' },
     h('table', { class: 'grid' },
       h('thead', {}, h('tr', {},
-        h('th', { style: { width: '64px' }, text: 'where' }), h('th', { text: 'entry' }),
+        h('th', { style: { width: '64px' }, text: 'where' }), h('th', { text: 'quote' }),
         showSource ? h('th', { style: { width: '200px' }, text: 'source' }) : null,
         h('th', { style: { width: '150px' }, text: 'topics' }), h('th', { style: { width: '110px' }, text: 'added' }))),
       h('tbody', {}, rows)));
@@ -332,7 +344,7 @@ function entryTable(entries, { showSource = true, fresh = null } = {}) {
 function entryList(entries, opts = {}) {
   if (!entries.length) return null;
   if (isWide() && !opts.compact) return entryTable(entries, { showSource: opts.showSource, fresh: opts.fresh });
-  return [h('div', { class: 'colhead' }, h('span', { class: 'w36', text: '' }), h('span', { style: { flex: 1 }, text: opts.head || 'entry' })),
+  return [opts.head === false ? null : h('div', { class: 'colhead' }, h('span', { class: 'w36', text: '' }), h('span', { style: { flex: 1 }, text: opts.head || 'quote' })),
     entries.map((e) => entryRow(e, { ...opts, fresh: e.id === opts.fresh })), h('div', { class: 'list-end' })];
 }
 
@@ -390,7 +402,7 @@ function moreGroup(entries, first, rowOpts) {
 // ---------- inputs for people and topics ----------
 // Type a name: people and topics already in the library are offered; Enter (or the last line) adds a new one.
 
-function chipInput({ label, initial = [], options, single = false, placeholder = 'add', newLabel, tt = false, id, quick = 0, onchange }) {
+function chipInput({ label, initial = [], options, single = false, placeholder = 'add', newLabel, tt = false, id, quick = 0, onchange, allowNew = true, chipClass = null }) {
   let items = [...initial];
   let active = -1;
   let shown = [];
@@ -414,6 +426,7 @@ function chipInput({ label, initial = [], options, single = false, placeholder =
     if (!text) return;
     const q = fold(text);
     const exact = options().find((o) => fold(o.label) === q || (o.alt || []).some((a) => fold(a) === q));
+    if (!allowNew && !exact) { add(options().find((o) => !has(o.key) && matches(o, q))); input.value = ''; return; }
     add(exact || { key: 'new:' + q, label: text, value: text });
   }
   function drawList() {
@@ -425,7 +438,7 @@ function chipInput({ label, initial = [], options, single = false, placeholder =
       shown.map((o, k) => h('button', { type: 'button', role: 'option', class: k === active ? 'on' : '',
         onpointerdown: (ev) => ev.preventDefault(), onclick: () => add(o) }, h('span', { class: tt ? 'tt' : '', text: o.label }),
       o.sub ? h('span', { class: 'muted', text: o.sub }) : null)),
-      exists ? null : h('button', { type: 'button', class: 'new', onpointerdown: (ev) => ev.preventDefault(), onclick: addTyped },
+      exists || !allowNew ? null : h('button', { type: 'button', class: 'new', onpointerdown: (ev) => ev.preventDefault(), onclick: addTyped },
         `+ ${newLabel} “${input.value.trim()}”`));
     list.hidden = false;
     input.setAttribute('aria-expanded', 'true');
@@ -437,7 +450,7 @@ function chipInput({ label, initial = [], options, single = false, placeholder =
       type: 'button', onpointerdown: (ev) => ev.preventDefault(), onclick: () => add(o) }, o.label)));
   }
   function draw() {
-    put(box, items.map((i) => h('span', { class: `chip${tt ? '' : ' person'}` }, i.label,
+    put(box, items.map((i) => h('span', { class: `chip ${chipClass || (tt ? '' : 'person')}` }, i.label,
       h('button', { type: 'button', 'aria-label': `Remove ${i.label}`, onclick: (ev) => {
         ev.stopPropagation(); items = items.filter((x) => x !== i); changed(); draw();
       } }, '×'))), single && items.length ? null : input);
@@ -472,7 +485,7 @@ function chipInput({ label, initial = [], options, single = false, placeholder =
 
 function personOption(p) {
   return { key: 'p' + p.id, label: p.name, value: p.id, alt: [p.sort_name, ...(p.aliases || [])],
-    sub: p.entries != null ? `${p.sort_name} · ${plural(p.entries, 'entry')}` : p.sort_name };
+    sub: p.entries != null ? `${p.sort_name} · ${plural(p.entries, 'quote')}` : p.sort_name };
 }
 const personItem = (p) => ({ key: 'p' + p.id, label: p.name, value: p.id });
 
@@ -481,17 +494,26 @@ function peopleInput(label, initial, allPeople, opts = {}) {
     newLabel: 'new person', placeholder: opts.placeholder || 'type a name', ...opts });
 }
 
+// the books, videos, classes… a note is on: chosen from the library
+function sourcesInput(label, initial, allSources, opts = {}) {
+  const item = (src) => ({ key: 's' + src.id, label: src.title, value: src.id });
+  return chipInput({ label, initial: initial.map(item), allowNew: false, placeholder: 'find a source', chipClass: 'source',
+    options: () => allSources.map((src) => ({ ...item(src), sub: [src.kind, makers(src).map((p) => p.name).join(', ')].filter(Boolean).join(' · ') })),
+    ...opts });
+}
+
 function topicsInput(label, initial, allTopics, opts = {}) {
   const byUse = [...allTopics].sort((a, b) => b.entries - a.entries);
   return chipInput({ label, tt: true, initial: initial.map((t) => ({ key: 't' + fold(t), label: t, value: t })),
-    options: () => byUse.map((t) => ({ key: 't' + fold(t.name), label: t.name, value: t.name, sub: plural(t.entries, 'entry') })),
+    options: () => byUse.map((t) => ({ key: 't' + fold(t.name), label: t.name, value: t.name, sub: plural(t.entries, 'quote') })),
     newLabel: 'new topic', placeholder: 'add a topic', quick: 8, ...opts });
 }
 
-function kindSwitch(get, set, after) {
-  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Kind' });
-  const draw = () => put(seg, ['quote', 'comment'].map((k) => h('button', { type: 'button', class: get() === k ? 'on' : '',
-    'aria-pressed': get() === k ? 'true' : 'false', onclick: () => { set(k); draw(); after?.(); } }, k === 'quote' ? 'Quote' : 'Comment')));
+// a passage from the source, or your own note on it
+function modeSwitch(get, set, after) {
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Quote or note' });
+  const draw = () => put(seg, ['quote', 'note'].map((k) => h('button', { type: 'button', class: get() === k ? 'on' : '',
+    'aria-pressed': get() === k ? 'true' : 'false', onclick: () => { set(k); draw(); after?.(); } }, k === 'quote' ? 'Quote' : 'Note')));
   draw();
   return seg;
 }
@@ -612,7 +634,7 @@ async function viewLibrary({ params }) {
     if (!sources.length) {
       return h('div', { class: 'empty' }, 'Nothing here yet.', h('a', { class: 'btn primary', href: '#/capture' }, 'Capture something'));
     }
-    return [shown.length ? h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'source' }), h('span', { class: 'w40 r', text: 'entries' })) : null,
+    return [shown.length ? h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'source' }), h('span', { class: 'w40 r', text: 'items' })) : null,
       shown.map((s) => sourceRow(s)), shown.length ? h('div', { class: 'list-end' }) : h('div', { class: 'empty', text: 'Nothing matches.' })];
   }
 
@@ -633,7 +655,7 @@ async function viewLibrary({ params }) {
     const shown = people.filter((p) => (which === 'everyone' || (which === 'authors' ? p.works + p.translated > 0 : p.about_in > 0))
       && (!needle || fold(`${p.name} ${p.sort_name} ${(p.aliases || []).join(' ')}`).includes(needle)));
     if (!people.length) return h('div', { class: 'empty', text: 'People appear here as you add sources and say who they are about.' });
-    const out = [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'person' }), h('span', { class: 'w40 r', text: 'entries' }))];
+    const out = [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'person' }), h('span', { class: 'w40 r', text: 'quotes' }))];
     let letter = null;
     for (const p of shown) {
       const first = fold(p.sort_name).charAt(0).toUpperCase();
@@ -655,7 +677,7 @@ async function viewLibrary({ params }) {
     let shown = topics.filter((t) => (order !== 'notes' || t.notes) && (!needle || fold(t.name).includes(needle)));
     if (order === 'use') shown = [...shown].sort((a, b) => b.entries - a.entries);
     if (!topics.length) return h('div', { class: 'empty', text: 'Topics appear here as you add them to quotes, sources and notes.' });
-    return [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'topic' }), h('span', { class: 'w40 r', text: 'entries' })),
+    return [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'topic' }), h('span', { class: 'w40 r', text: 'quotes' })),
       shown.map((t) => h('a', { class: 'pick', href: `#/topic/${t.id}` },
         h('span', { class: 'main' }, h('span', { class: 't tt', text: t.name }),
           h('span', { class: 'a', text: [plural(t.sources, 'source'), t.notes ? plural(t.notes, 'note') : null].filter(Boolean).join(' · ') })),
@@ -671,8 +693,9 @@ async function viewLibrary({ params }) {
     nav.label(LIBRARY_VIEWS.find(([k]) => k === view)[1]);
     const needle = fold(q.value.trim());
     put(list, view === 'people' ? drawPeople(needle) : view === 'topics' ? drawTopics(needle) : drawSources(needle),
-      needle.length > 1 ? h('a', { class: 'more-btn', href: `#/entries?q=${encodeURIComponent(q.value.trim())}` },
-        `Quotes and comments containing “${q.value.trim()}” ›`) : null);
+      needle.length > 1 ? [h('a', { class: 'more-btn', href: `#/quotes?q=${encodeURIComponent(q.value.trim())}` },
+        `Quotes containing “${q.value.trim()}” ›`), h('a', { class: 'more-btn', href: `#/notes?q=${encodeURIComponent(q.value.trim())}` },
+        `Notes containing “${q.value.trim()}” ›`)] : null);
   }
   q.addEventListener('input', draw);
   draw();
@@ -690,14 +713,48 @@ async function viewLibrary({ params }) {
   return { el, nav: 'library' };
 }
 
+// ----- folding: a +/− on a section or a group, remembered on this device -----
+
+const folds = {
+  all() { return prefs.get('folded', {}); },
+  is(key) { return this.all()[key] === 1; },
+  set(key, folded) {
+    const all = this.all();
+    if (folded) all[key] = 1; else delete all[key];
+    const keys = Object.keys(all);
+    if (keys.length > 600) for (const k of keys.slice(0, keys.length - 600)) delete all[k];   // the oldest go
+    prefs.set('folded', all);
+  },
+};
+
+// head: the section's or group's title line (the button is added to it); body: what folds away
+function foldable(key, head, body) {
+  const box = h('div', { class: 'fold-body' }, body);
+  let folded = folds.is(key);
+  const btn = h('button', { type: 'button', class: 'fold-btn' });
+  const apply = () => {
+    box.hidden = folded;
+    btn.textContent = folded ? '+' : '−';
+    btn.setAttribute('aria-expanded', String(!folded));
+    btn.setAttribute('aria-label', folded ? 'Show this part' : 'Hide this part');
+    head.classList.toggle('folded', folded);
+  };
+  btn.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); folded = !folded; folds.set(key, folded); apply(); });
+  head.append(btn);
+  apply();
+  return [head, box];
+}
+
 // ----- a source -----
 
 async function viewSource({ args: [id] }) {
   const order = prefs.get('sourceOrder', 'page');
-  const [source, entries] = await Promise.all([api(`/api/sources/${id}`), api(`/api/sources/${id}/entries?order=${order}`)]);
+  const [source, entries, notes] = await Promise.all([api(`/api/sources/${id}`), api(`/api/sources/${id}/entries?order=${order}`),
+    api(`/api/notes?source_id=${id}&order=place`)]);
   nav.label(shorten(source.title, 24));
   const k = kindOf(source);
   const fresh = nav.flash.entry || null;
+  const freshNote = nav.flash.note || null;
   const coverPending = nav.flash.cover === source.id;
   nav.flash = {};
   let selecting = false;
@@ -709,15 +766,14 @@ async function viewSource({ args: [id] }) {
     prefs.set('sourceOrder', order === 'page' ? 'date' : 'page'); render();
   } }, order === 'page' ? `by ${k.where === 'page' ? 'page' : 'place'}` : 'by date') : null;
 
-  const shownEntries = () => {
-    const needle = fold(q.value.trim());
-    return entries.filter((e) => !needle || fold(`${e.text} ${e.note || ''} ${e.topics.map((t) => t.name).join(' ')} ${e.page || ''}`).includes(needle));
-  };
+  const needle = () => fold(q.value.trim());
+  const shownEntries = () => entries.filter((e) => !needle() || fold(`${e.text} ${e.note || ''} ${e.topics.map((t) => t.name).join(' ')} ${e.page || ''}`).includes(needle()));
+  const shownNotes = () => notes.filter((n) => !needle() || fold(`${n.title || ''} ${n.text} ${n.place || ''} ${n.topics.map((t) => t.name).join(' ')}`).includes(needle()));
 
   function drawSelectBar() {
     const shown = shownEntries();
     put(selectBar,
-      h('span', { class: 'grow', text: chosen.size ? `${chosen.size} selected` : 'Tap the entries to delete' }),
+      h('span', { class: 'grow', text: chosen.size ? `${chosen.size} selected` : 'Tap the quotes to delete' }),
       h('button', { type: 'button', class: 'btn small', onclick: () => {
         const all = shown.every((e) => chosen.has(e.id));
         shown.forEach((e) => (all ? chosen.delete(e.id) : chosen.add(e.id)));
@@ -725,10 +781,10 @@ async function viewSource({ args: [id] }) {
       } }, shown.length && shown.every((e) => chosen.has(e.id)) ? 'None' : 'All'),
       h('button', { type: 'button', class: 'btn small danger primary', disabled: !chosen.size, onclick: async () => {
         const n = chosen.size;
-        const ok = await confirmDialog({ title: `Delete ${plural(n, 'entry')}?`, text: 'This cannot be undone.',
-          choices: [{ label: `Delete ${plural(n, 'entry')}`, value: true, danger: true }] });
+        const ok = await confirmDialog({ title: `Delete ${plural(n, 'quote')}?`, text: 'This cannot be undone.',
+          choices: [{ label: `Delete ${plural(n, 'quote')}`, value: true, danger: true }] });
         if (!ok) return;
-        try { await deleteEntries([...chosen]); toast(`${plural(n, 'entry')} deleted`); render(); } catch (err) { toast(err.message); }
+        try { await deleteEntries([...chosen]); toast(`${plural(n, 'quote')} deleted`); render(); } catch (err) { toast(err.message); }
       } }, 'Delete'),
       h('button', { type: 'button', class: 'btn small plain', onclick: () => { selecting = false; chosen.clear(); draw(); } }, 'Done'));
   }
@@ -743,27 +799,42 @@ async function viewSource({ args: [id] }) {
           if (box.checked) chosen.add(e.id); else chosen.delete(e.id);
           drawSelectBar();
         } });
-        return h('label', { class: `entry-row${e.kind === 'comment' ? ' comment' : ''}` }, h('span', { class: 'check' }, box),
+        return h('label', { class: 'entry-row' }, h('span', { class: 'check' }, box),
           h('div', { class: 'body' }, h('p', { class: 'txt' }, e.text), h('span', { class: 'meta', text: where(e) })));
       }), h('div', { class: 'list-end' }));
       return;
     }
-    put(list,
-      entryList(shown, { showSource: false, source: source.id, fresh, head: k.link ? 'quotes and comments' : 'entry' }),
-      !shown.length && entries.length ? h('div', { class: 'empty', text: 'Nothing matches.' }) : null,
-      !entries.length ? h('div', { class: 'empty' }, 'Nothing captured from it yet.',
-        h('a', { class: 'btn primary', href: `#/capture?source=${source.id}` }, '+ Capture')) : null);
+    const sn = shownNotes();
+    const both = notes.length && entries.length;
+    const quotesPart = shown.length ? entryList(shown, { showSource: false, source: source.id, fresh, head: both ? false : 'quote' }) : null;
+    const notesPart = sn.length ? [sn.map((n) => noteBlock(n, { here: { source: source.id }, fresh: n.id === freshNote })), h('div', { class: 'list-end' })] : null;
+    const parts = [];
+    const section = (key, title, count, content) => {
+      if (!content) return;
+      if (!both) { parts.push(content); return; }   // one kind only: no heading needed
+      parts.push(...foldable(`source:${source.id}:${key}`, sectionHead(null, title, count), content));
+    };
+    const notesSection = () => section('notes', 'Your notes', sn.length, notesPart);
+    const quotesSection = () => section('quotes', 'Quotes', shown.length, quotesPart);
+    if (k.notesFirst) { notesSection(); quotesSection(); } else { quotesSection(); notesSection(); }
+    put(list, parts,
+      !shown.length && !sn.length && (entries.length || notes.length) ? h('div', { class: 'empty', text: 'Nothing matches.' }) : null,
+      !entries.length && !notes.length ? h('div', { class: 'empty' }, 'Nothing captured from it yet.',
+        h('div', { class: 'row-btns' },
+          h('a', { class: 'btn primary', href: `#/capture?source=${source.id}` }, '+ Capture'),
+          h('a', { class: 'btn', href: `#/note/new?source=${source.id}` }, '+ Note'))) : null);
   }
   q.addEventListener('input', draw);
 
   const removeSource = async () => {
     const n = entries.length;
+    const kept = notes.length ? ` Your ${plural(notes.length, 'note')} on it ${notes.length === 1 ? 'is' : 'are'} kept.` : '';
     const choice = await confirmDialog({
       title: `Delete “${source.title}”?`,
-      text: n ? `It has ${plural(n, 'entry')}. This cannot be undone.` : 'This cannot be undone.',
+      text: (n ? `It has ${plural(n, 'quote')}. This cannot be undone.` : 'This cannot be undone.') + kept,
       choices: [
-        { label: n ? `Delete it and its ${plural(n, 'entry')}` : 'Delete it', value: 'all', danger: true },
-        n ? { label: `Delete only its ${plural(n, 'entry')}`, value: 'entries' } : null,
+        { label: n ? `Delete it and its ${plural(n, 'quote')}` : 'Delete it', value: 'all', danger: true },
+        n ? { label: `Delete only its ${plural(n, 'quote')}`, value: 'entries' } : null,
       ].filter(Boolean),
     });
     try {
@@ -774,14 +845,14 @@ async function viewSource({ args: [id] }) {
         nav.back('');
       } else if (choice === 'entries') {
         await deleteEntries(entries.map((e) => e.id));
-        toast(`${plural(n, 'entry')} deleted`);
+        toast(`${plural(n, 'quote')} deleted`);
         render();
       }
     } catch (err) { toast(err.message); }
   };
 
   draw();
-  if (fresh) setTimeout(() => document.getElementById(`e${fresh}`)?.scrollIntoView({ block: 'center' }), 60);
+  if (fresh || freshNote) setTimeout(() => document.getElementById(fresh ? `e${fresh}` : `n${freshNote}`)?.scrollIntoView({ block: 'center' }), 60);
 
   const wide = source.kind === 'video' || source.kind === 'podcast';
   const coverEl = h('span', { class: wide ? 'video-cover' : '' }, thumb(source, wide ? 'hero' : isWide() ? 'large' : ''));
@@ -798,7 +869,8 @@ async function viewSource({ args: [id] }) {
   const people = source.people;
   const details = joinDots([h('span', { class: 'sc', text: source.kind }), source.publisher,
     source.date ? plainDate(source.date) : source.year, source.edition, source.field ? h('i', { text: source.field }) : null]);
-  const counts = [plural(source.quote_count, 'quote'), source.comment_count ? plural(source.comment_count, 'comment') : null].join(' · ').replace(/ · $/, '');
+  const counts = [source.quote_count ? plural(source.quote_count, 'quote') : null, source.note_count ? plural(source.note_count, 'note') : null]
+    .filter(Boolean).join(' · ');
   const info = h('div', { class: 'info' },
     h('h1', { text: source.title }),
     source.subtitle ? h('span', { class: 'it', text: source.subtitle }) : null,
@@ -807,18 +879,19 @@ async function viewSource({ args: [id] }) {
     h('span', { class: 'meta' }, details),
     people.about.length ? h('span', { class: 'meta' }, 'about ', personLinks(people.about)) : null,
     source.topics.length ? topicLinks(source.topics) : null,
-    entries.length ? h('span', { class: 'counts', text: counts }) : null,
+    counts ? h('span', { class: 'counts', text: counts }) : null,
     h('div', { class: 'actions' },
       h('a', { class: 'btn primary small', href: `#/capture?source=${source.id}` }, '+ Capture'),
+      h('a', { class: 'btn small', href: `#/note/new?source=${source.id}` }, '+ Note'),
       source.url ? h('a', { class: 'btn small', href: source.url, target: '_blank', rel: 'noopener noreferrer' },
         k.link && source.kind !== 'article' ? `Open the ${source.kind}` : 'Open the link', icon('external', 14)) : null,
-      entries.length ? h('a', { class: 'btn small', href: `/api/sources/${source.id}/export.md`, download: '' }, 'Export') : null,
+      entries.length || notes.length ? h('a', { class: 'btn small', href: `/api/sources/${source.id}/export.md`, download: '' }, 'Export') : null,
       entries.length ? h('button', { class: 'btn small', type: 'button', onclick: () => { selecting = true; draw(); } }, 'Select') : null));
   const el = h('div', {},
     bar(backButton('', 'Library'), '', h('a', { class: 'link-btn', href: `#/source/${id}/edit` }, 'Edit')),
     h('header', { class: 'top', style: { paddingTop: '6px' } },
       wide ? [coverEl, h('div', { class: 'book-head' }, info)] : h('div', { class: 'book-head' }, coverEl, info),
-      entries.length > 5 ? h('label', { class: 'search' }, icon('search', 16), q) : null,
+      entries.length + notes.length > 5 ? h('label', { class: 'search' }, icon('search', 16), q) : null,
       entries.length > 1 && orderBtn ? h('div', { class: 'tools' }, orderBtn) : null),
     list,
     selectBar,
@@ -829,15 +902,17 @@ async function viewSource({ args: [id] }) {
 
 // ----- a person -----
 
-const SECTION_TITLES = { works: 'Works', translated: 'Translations', quoted: 'Quoted elsewhere' };
+const SECTION_TITLES = { works: 'Works', translated: 'Translations', said: 'Said', quoted: 'Quoted elsewhere' };
 
-function noteBlock(n, { full = false, here = null } = {}) {
+function noteBlock(n, { full = false, here = null, fresh = false } = {}) {
+  const on = (n.sources || []).filter((s) => s.id !== here?.source);
   const also = [...n.people.filter((p) => p.id !== here?.person).map((p) => surname(p)),
     ...n.topics.filter((t) => t.id !== here?.topic).map((t) => t.name)];
-  return h('a', { class: `note-block${full ? ' full' : ''}`, href: `#/note/${n.id}` },
-    n.title ? h('b', { class: 'note-title', text: n.title }) : null,
+  return h('a', { class: `note-block${full ? ' full' : ''}${fresh ? ' fresh' : ''}`, href: `#/note/${n.id}`, id: `n${n.id}` },
+    n.title || n.place ? h('b', { class: 'note-title', text: [placeText(n.place), n.title].filter(Boolean).join(' — ') }) : null,
     h('p', { class: 'note-text', text: n.text }),
-    h('span', { class: 'meta' }, joinDots([fullDate(n.updated_at), also.length ? `also on ${also.join(', ')}` : null])));
+    h('span', { class: 'meta' }, joinDots([on.length ? h('i', { text: shorten(on.map((s) => s.title).join(', '), 60) }) : null,
+      fullDate(n.created_at), also.length ? `also on ${also.join(', ')}` : null])));
 }
 
 async function viewPerson({ args: [id] }) {
@@ -846,24 +921,34 @@ async function viewPerson({ args: [id] }) {
   nav.label(surname(p));
   let medium = '';
   const media = {};
-  for (const sec of data.sections) for (const g of sec.groups) media[g.source.kind] = (media[g.source.kind] || 0) + Math.max(1, g.entries.length);
+  const kindKey = (g) => (g.source ? g.source.kind : 'said');
+  for (const sec of data.sections) for (const g of sec.groups) media[kindKey(g)] = (media[kindKey(g)] || 0) + Math.max(1, g.entries.length + g.notes.length);
   const body = h('div');
   const aside = h('div', { class: 'aside' });
 
+  function groupBlock(sec, g) {
+    const content = [
+      g.notes.length ? g.notes.map((note) => noteBlock(note, { here: { person: p.id, source: g.source?.id } })) : null,
+      g.entries.length ? moreGroup(g.entries, g.source ? 3 : 8, { person: p.id, source: g.source?.id }) : null,
+    ];
+    if (!g.source) return content;           // what they said: one group, with no source to name
+    const head = h('div', { class: 'group-row' }, sourceRow(g.source, { count: false }));
+    return g.notes.length || g.entries.length ? foldable(`person:${p.id}:${sec.key}:${g.source.id}`, head, content) : head;
+  }
+
   function draw() {
     const parts = [];
-    const notes = data.notes.length ? [sectionHead(isWide() ? null : 1, 'Notes', data.notes.length),
-      data.notes.map((note) => noteBlock(note, { here: { person: p.id } }))] : null;
+    const notes = data.notes.length ? foldable(`person:${p.id}:notes`, sectionHead(isWide() ? null : 1, 'Notes', data.notes.length),
+      data.notes.map((note) => noteBlock(note, { here: { person: p.id } }))) : null;
     for (const sec of data.sections) {
-      const groups = sec.groups.filter((g) => !medium || g.source.kind === medium);
+      const groups = sec.groups.filter((g) => !medium || kindKey(g) === medium);
       if (!groups.length) continue;
-      const total = groups.reduce((a, g) => a + g.entries.length, 0);
+      const quotes = groups.reduce((a, g) => a + g.entries.length, 0);
+      const noteCount = groups.reduce((a, g) => a + g.notes.length, 0);
       const title = sec.key === 'about' ? `About ${surname(p)}` : SECTION_TITLES[sec.key];
-      parts.push(sectionHead(null, title, [plural(groups.length, 'source'), total ? plural(total, 'entry') : null].filter(Boolean).join(' · ')));
-      for (const g of groups) {
-        parts.push(sourceRow(g.source, { count: false }));
-        if (g.entries.length) parts.push(moreGroup(g.entries, 3, { person: p.id, source: g.source.id }));
-      }
+      const count = [sec.key === 'said' ? null : plural(groups.filter((g) => g.source).length, 'source'),
+        quotes ? plural(quotes, 'quote') : null, noteCount ? plural(noteCount, 'note') : null].filter(Boolean).join(' · ');
+      parts.push(...foldable(`person:${p.id}:${sec.key}`, sectionHead(null, title, count), groups.map((g) => groupBlock(sec, g))));
     }
     // section numbers follow the order on screen: notes first on a phone, beside on a computer
     let k = notes && !isWide() ? 1 : 0;
@@ -879,8 +964,8 @@ async function viewPerson({ args: [id] }) {
   draw();
   const kinds = Object.keys(media);
   const counts = [p.works ? plural(p.works, 'work') : null, p.translated ? `translated ${p.translated}` : null,
-    p.quoted_in ? `quoted in ${plural(p.quoted_in, 'source')}` : null, p.about_in ? `written about in ${p.about_in}` : null,
-    plural(p.entries, 'entry')].filter(Boolean).join(' · ');
+    p.said ? `said ${p.said}` : null, p.quoted_in ? `quoted in ${plural(p.quoted_in, 'source')}` : null,
+    p.about_in ? `written about in ${p.about_in}` : null, plural(p.entries, 'quote')].filter(Boolean).join(' · ');
   const el = h('div', {},
     bar(backButton('?view=people', 'People'), '', h('a', { class: 'link-btn', href: `#/person/${id}/edit` }, 'Edit')),
     h('header', { class: 'top', style: { paddingTop: '6px' } },
@@ -890,8 +975,10 @@ async function viewPerson({ args: [id] }) {
       p.aliases.length ? h('span', { class: 'meta it', text: `Also written: ${p.aliases.join(', ')}` }) : null,
       h('div', { class: 'actions' },
         h('a', { class: 'btn small', href: `#/note/new?person=${p.id}` }, '+ Note'),
+        h('a', { class: 'btn small', href: `#/capture?said=${p.id}` }, `+ Words ${surname(p)} said`),
         h('a', { class: 'btn small', href: `#/capture?about=${p.id}` }, `+ Capture about ${surname(p)}`)),
-      kinds.length > 1 ? filterRow([['', 'all'], ...kinds.map((m) => [m, `${KINDS[m].several} ${media[m]}`])], '', (m) => { medium = m; draw(); }) : null),
+      kinds.length > 1 ? filterRow([['', 'all'], ...kinds.map((m) => [m, `${m === 'said' ? 'said' : KINDS[m].several} ${media[m]}`])], '',
+        (m) => { medium = m; draw(); }) : null),
     h('div', { class: 'two-col' }, body, isWide() ? aside : null));
   return { el, nav: 'library' };
 }
@@ -909,9 +996,12 @@ async function viewTopic({ args: [id] }) {
     for (const e of data.entries) {
       let key; let label; let href = null;
       if (by === 'person') { key = e.by ? 'p' + e.by.id : 'none'; label = e.by ? e.by.sort_name : 'No author'; href = e.by ? `#/person/${e.by.id}` : null; }
-      else if (by === 'source') { key = 's' + e.source.id; label = e.source.title; href = `#/source/${e.source.id}`; }
-      else { key = e.created_at.slice(0, 7); label = plainDate(key); }
-      if (!map.has(key)) map.set(key, { label, href, entries: [] });
+      else if (by === 'source') {
+        key = e.source ? 's' + e.source.id : 'said';
+        label = e.source ? e.source.title : 'Said, no source';
+        href = e.source ? `#/source/${e.source.id}` : null;
+      } else { key = e.created_at.slice(0, 7); label = plainDate(key); }
+      if (!map.has(key)) map.set(key, { key, label, href, entries: [] });
       map.get(key).entries.push(e);
     }
     const list = [...map.values()];
@@ -919,9 +1009,9 @@ async function viewTopic({ args: [id] }) {
     return list;
   }
   function draw() {
-    put(body, groups().map((g) => [
+    put(body, groups().map((g) => foldable(`topic:${t.id}:${by}:${g.key}`,
       h('div', { class: 'group-head' }, g.href ? h('a', { href: g.href, text: g.label }) : h('span', { text: g.label }), h('span', { class: 'count', text: g.entries.length })),
-      moreGroup(g.entries, 3, { showSource: by !== 'source', person: by === 'person' ? Number(g.href?.split('/').pop()) : null })]),
+      moreGroup(g.entries, 3, { showSource: by !== 'source', person: by === 'person' ? Number(g.href?.split('/').pop()) : null }))),
     data.entries.length ? h('div', { class: 'list-end' }) : null);
   }
   draw();
@@ -930,7 +1020,8 @@ async function viewTopic({ args: [id] }) {
     bar(backButton('?view=topics', 'Topics'), '', h('a', { class: 'link-btn', href: `#/topic/${id}/edit` }, 'Edit')),
     h('header', { class: 'top', style: { paddingTop: '6px' } },
       h('h1', { text: t.name }),
-      h('span', { class: 'meta', text: [plural(t.sources, 'source'), plural(data.people.length, 'person'), plural(t.entries, 'entry')].join(' · ') }),
+      h('span', { class: 'meta', text: [plural(t.sources, 'source'), plural(data.people.length, 'person'), plural(t.entries, 'quote'),
+        t.notes ? plural(t.notes, 'note') : null].filter(Boolean).join(' · ') }),
       data.people.length ? h('div', { class: 'chips' }, h('span', { class: 'label', text: 'people' }),
         data.people.slice(0, 12).map((pp) => h('a', { class: 'chip serif', href: `#/person/${pp.id}` }, surname(pp), h('span', { class: 'n', text: pp.count })))) : null,
       data.related.length ? h('div', { class: 'chips' }, h('span', { class: 'label', text: 'often with' }),
@@ -938,30 +1029,31 @@ async function viewTopic({ args: [id] }) {
       h('div', { class: 'actions' },
         h('a', { class: 'btn small', href: `#/note/new?topic=${t.id}` }, '+ Note'),
         h('a', { class: 'btn small', href: `#/capture?topic=${t.id}` }, '+ Capture'))),
-    data.notes.length ? [sectionHead(++n, 'Notes', data.notes.length), data.notes.map((note) => noteBlock(note, { full: true, here: { topic: t.id } }))] : null,
-    data.entries.length ? [sectionHead(++n, 'Entries', data.entries.length),
+    data.notes.length ? foldable(`topic:${t.id}:notes`, sectionHead(++n, 'Notes', data.notes.length),
+      data.notes.map((note) => noteBlock(note, { full: true, here: { topic: t.id } }))) : null,
+    data.entries.length ? [...foldable(`topic:${t.id}:quotes`, sectionHead(++n, 'Quotes', data.entries.length), [
       h('div', { class: 'tools pad-x' }, h('span', { class: 'label', text: 'group by' }),
-        segmented('Group entries by', [['person', 'person'], ['source', 'source'], ['date', 'date']], by, (k) => { by = k; prefs.set('topicGroup', k); draw(); })),
-      body] : h('div', { class: 'empty', text: 'No quote or comment on this topic yet.' }));
+        segmented('Group quotes by', [['person', 'person'], ['source', 'source'], ['date', 'date']], by, (k) => { by = k; prefs.set('topicGroup', k); draw(); })),
+      body])] : h('div', { class: 'empty', text: 'No quote on this topic yet.' }));
   return { el, nav: 'library' };
 }
 
-// ----- all quotes and comments -----
+// ----- all quotes -----
 
 async function viewEntries({ params }) {
-  const f = { q: params.get('q') || '', kind: params.get('kind') || '', medium: params.get('medium') || '' };
+  const f = { q: params.get('q') || '', medium: params.get('medium') || '' };
   let entries = [];
   let offset = 0;
   let more = false;
   const PAGE = 200;
+  const mediumOf = (e) => (e.source ? e.source.kind : 'said');
   async function load(append) {
     if (f.q) {
       let hits = await api(`/api/search?q=${encodeURIComponent(f.q)}&limit=500`);
-      hits = hits.filter((e) => (!f.kind || e.kind === f.kind) && (!f.medium || e.source.kind === f.medium));
+      hits = hits.filter((e) => !f.medium || mediumOf(e) === f.medium);
       entries = hits; more = false;
     } else {
       const qs = new URLSearchParams({ limit: PAGE, offset });
-      if (f.kind) qs.set('kind', f.kind);
       if (f.medium) qs.set('medium', f.medium);
       const page = await api(`/api/entries?${qs}`);
       entries = append ? entries.concat(page) : page;
@@ -969,23 +1061,21 @@ async function viewEntries({ params }) {
     }
   }
   await load(false);
-  nav.label('Entries');
+  nav.label('Quotes');
   const setFilter = (key, value) => {
     f[key] = value;
     const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v));
-    history.replaceState(null, '', `#/entries${qs.toString() ? '?' + qs : ''}`);
+    history.replaceState(null, '', `#/quotes${qs.toString() ? '?' + qs : ''}`);
     const top = nav.stack[nav.stack.length - 1];
     if (top) { top.hash = location.hash; nav.save(); }
     offset = 0;
     load(false).then(draw).catch((err) => put(list, errorBox(err)));
   };
-  const q = h('input', { type: 'search', placeholder: 'Search words, people, topics', 'aria-label': 'Search quotes and comments', value: f.q, enterkeyhint: 'search' });
+  const q = h('input', { type: 'search', placeholder: 'Search words, people, topics', 'aria-label': 'Search quotes', value: f.q, enterkeyhint: 'search' });
   q.addEventListener('input', debounce(() => setFilter('q', q.value.trim()), 350));
-  const kindSel = h('select', { class: 'filter', 'aria-label': 'Type', onchange: () => setFilter('kind', kindSel.value) },
-    h('option', { value: '' }, 'quotes and comments'), h('option', { value: 'quote' }, 'quotes'), h('option', { value: 'comment' }, 'comments'));
-  kindSel.value = f.kind;
   const mediumSel = h('select', { class: 'filter', 'aria-label': 'From', onchange: () => setFilter('medium', mediumSel.value) },
-    h('option', { value: '' }, 'from everything'), Object.entries(KINDS).map(([k, v]) => h('option', { value: k }, `from ${v.several}`)));
+    h('option', { value: '' }, 'from everything'), Object.entries(KINDS).map(([k, v]) => h('option', { value: k }, `from ${v.several}`)),
+    h('option', { value: 'said' }, 'said, no source'));
   mediumSel.value = f.medium;
   const list = h('div');
   const count = h('span', { class: 'count' });
@@ -993,23 +1083,24 @@ async function viewEntries({ params }) {
     count.textContent = entries.length + (more ? '+' : '');
     put(list,
       entryList(entries, { showSource: true }),
-      entries.length ? null : h('div', { class: 'empty', text: f.q || f.kind || f.medium ? 'Nothing matches.' : 'No quotes yet.' }),
+      entries.length ? null : h('div', { class: 'empty', text: f.q || f.medium ? 'Nothing matches.' : 'No quotes yet.' }),
       more ? h('div', { class: 'pad' }, h('button', { class: 'btn', type: 'button', onclick: async () => { offset += PAGE; await load(true); draw(); } }, 'Show more')) : null);
   }
   draw();
   const el = h('div', {},
     h('header', { class: 'top' },
-      h('div', { class: 'top-row' }, h('h1', {}, 'Entries', count)),
+      h('div', { class: 'top-row' }, h('h1', {}, 'Quotes', count)),
       h('label', { class: 'search' }, icon('search', 16), q),
-      h('div', { class: 'tools half' }, kindSel, mediumSel)),
+      h('div', { class: 'tools half' }, mediumSel)),
     list);
   if (f.q) setTimeout(() => { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 30);
-  return { el, nav: 'entries' };
+  return { el, nav: 'quotes' };
 }
 
-// ----- one quote or comment -----
+// ----- one quote -----
 
 function citation(e, source) {
+  if (!source) return `${e.by?.name || ''}${e.page ? ', ' + e.page : ''}`;
   const who = e.words_by ? `${e.words_by.name}, quoted in ` : '';
   const by = makers(source).map((p) => p.name).join(', ');
   const place = where(e);
@@ -1018,32 +1109,35 @@ function citation(e, source) {
 
 async function viewEntry({ args: [id] }) {
   const e = await api(`/api/entries/${id}`);
-  const source = await api(`/api/sources/${e.source.id}`);
-  nav.label(e.kind === 'quote' ? 'Quote' : 'Comment');
+  const source = e.source ? await api(`/api/sources/${e.source.id}`) : null;
+  nav.label('Quote');
+  const home = source ? `source/${source.id}` : e.by ? `person/${e.by.id}` : 'quotes';
   const del = async () => {
-    const ok = await confirmDialog({ title: `Delete this ${kindName(e.kind)}?`, text: 'This cannot be undone.',
-      choices: [{ label: `Delete the ${kindName(e.kind)}`, value: true, danger: true }] });
+    const ok = await confirmDialog({ title: 'Delete this quote?', text: 'This cannot be undone.',
+      choices: [{ label: 'Delete the quote', value: true, danger: true }] });
     if (!ok) return;
     try {
       await deleteEntries([e.id]);
-      toast(`${e.kind === 'quote' ? 'Quote' : 'Comment'} deleted`);
-      nav.back(`source/${e.source.id}`);
+      toast('Quote deleted');
+      nav.back(home);
     } catch (err) { toast(err.message); }
   };
   const copy = async () => {
     try { await navigator.clipboard.writeText(`${e.text}\n— ${citation(e, source)}`); toast('Copied with its reference'); } catch { toast('Copying is not allowed here'); }
   };
-  const linkLabel = source.kind === 'article' && e.kind === 'quote' ? 'Open at this passage' : source.kind === 'article' ? 'Open the article' : `Open the ${source.kind}`;
+  const linkLabel = source?.kind === 'article' ? 'Open at this passage' : `Open the ${source?.kind}`;
   const el = h('div', {},
-    bar(backButton(`source/${e.source.id}`, shorten(source.title, 24)), '', h('a', { class: 'link-btn', href: `#/entry/${id}/edit` }, 'Edit')),
+    bar(backButton(home, source ? shorten(source.title, 24) : e.by ? surname(e.by) : 'Quotes'), '', h('a', { class: 'link-btn', href: `#/entry/${id}/edit` }, 'Edit')),
     h('article', { class: 'entry-page' },
-      h('a', { class: 'book-link', href: `#/source/${source.id}` }, thumb(source),
-        h('span', {}, h('span', { class: 't', text: source.title }), makers(source).length ? [h('br'), h('span', { class: 'muted', text: makers(source).map((p) => p.name).join(', ') })] : null)),
-      h('div', { class: 'kv' }, joinDots([where(e) || null, e.kind === 'comment' ? h('i', { text: 'comment' }) : null, fullDate(e.created_at)])),
-      e.words_by ? h('p', { class: 'words-by' }, h('span', { class: 'sc', text: 'words of ' }), h('a', { class: 'plink', href: `#/person/${e.words_by.id}`, text: e.words_by.name }),
+      source ? h('a', { class: 'book-link', href: `#/source/${source.id}` }, thumb(source),
+        h('span', {}, h('span', { class: 't', text: source.title }), makers(source).length ? [h('br'), h('span', { class: 'muted', text: makers(source).map((p) => p.name).join(', ') })] : null))
+        : h('p', { class: 'words-by said' }, h('span', { class: 'sc', text: 'said by ' }),
+          e.by ? h('a', { class: 'plink', href: `#/person/${e.by.id}`, text: e.by.name }) : null, e.page ? `, ${e.page}` : ''),
+      h('div', { class: 'kv' }, joinDots([where(e) || null, fullDate(e.created_at)])),
+      source && e.words_by ? h('p', { class: 'words-by' }, h('span', { class: 'sc', text: 'words of ' }), h('a', { class: 'plink', href: `#/person/${e.words_by.id}`, text: e.words_by.name }),
         `, quoted by ${makers(source).map((p) => p.name).join(', ') || 'the source'}`) : null,
-      h('p', { class: `quote-env${e.kind === 'comment' ? ' comment-text' : ''}`, lang: source.language || null, text: e.text }),
-      e.note ? h('p', { class: 'note-p' }, h('b', { text: 'Note.' }), e.note) : null,
+      h('p', { class: 'quote-env', lang: source?.language || null, text: e.text }),
+      e.note ? h('p', { class: 'note-p' }, h('b', { text: 'Comment.' }), e.note) : null,
       e.about.length ? h('p', { class: 'kv-line' }, h('span', { class: 'label', text: 'about ' }), personLinks(e.about)) : null,
       e.topics.length ? topicLinks(e.topics) : null,
       e.link ? h('a', { class: 'btn small', href: e.link, target: '_blank', rel: 'noopener noreferrer', style: { alignSelf: 'flex-start' } }, linkLabel, icon('external', 14)) : null,
@@ -1056,65 +1150,91 @@ async function viewEntry({ args: [id] }) {
         h('button', { class: 'btn small', type: 'button', onclick: copy }, 'Copy'),
         h('a', { class: 'btn small', href: `#/note/new?entry=${e.id}` }, '+ Note'),
         h('button', { class: 'btn small danger', type: 'button', onclick: del }, 'Delete…'))));
-  return { el, nav: 'entries' };
+  return { el, nav: 'quotes' };
 }
 
-// the fields shared by capture and editing: who, about whom, topics, note
-function entryFields({ source, sources, people, topics, entry = null, about = null, topicNames = null, onSourceChange }) {
+// The fields shared by capture and editing: where, which source, your comment, about whom, topics, whose words.
+// source null: words someone said, from no source; "said by" then comes first and is needed.
+function entryFields({ source, sources, people, topics, entry = null, about = null, topicNames = null, onSourceChange, mode = 'quote', place = true }) {
   let touchedAbout = false;
   let touchedTopics = false;
-  const k = kindOf(source);
-  const page = h('input', { class: 'input', id: 'f-page', value: entry?.page || '', inputmode: 'text', style: { width: '110px' } });
-  const pageLabel = h('span', { text: k.where || 'where' });
-  const sourceSel = h('select', { class: 'select', id: 'f-source' }, sources.map((s) => h('option', { value: String(s.id) }, shorten(s.title, 60))));
-  sourceSel.value = String(source.id);
-  const wordsBy = peopleInput('words of (when not the author’s)', entry?.words_by ? [entry.words_by] : [], people,
-    { single: true, id: 'f-by', placeholder: 'a quote within the quote' });
-  const aboutIn = peopleInput('about', about || entry?.about || source.people.about, people,
+  let current = source;
+  const page = h('input', { class: 'input', id: 'f-page', value: entry?.page || '', inputmode: 'text' });
+  const pageLabel = h('span');
+  const sourceSel = h('select', { class: 'select', id: 'f-source' },
+    h('option', { value: '', disabled: Boolean(entry?.photo_id) }, 'none: words someone said'),   // a photo's quote keeps its source
+    sources.map((s) => h('option', { value: String(s.id) }, shorten(s.title, 60))));
+  sourceSel.value = source ? String(source.id) : '';
+  const wordsBy = peopleInput('', entry?.words_by ? [entry.words_by] : !source && entry?.by ? [entry.by] : [], people,
+    { single: true, id: 'f-by' });
+  const aboutIn = peopleInput('about', about || entry?.about || source?.people.about || [], people,
     { id: 'f-about', placeholder: 'who it is about', onchange: () => { touchedAbout = true; } });
-  const topicsIn = topicsInput('topics', topicNames || (entry ? entry.topics.map((t) => t.name) : source.topics.map((t) => t.name)), topics,
+  const topicsIn = topicsInput('topics', topicNames || (entry ? entry.topics.map((t) => t.name) : (source?.topics || []).map((t) => t.name)), topics,
     { id: 'f-topics', onchange: () => { touchedTopics = true; } });
   if (about) touchedAbout = true;
   if (topicNames) touchedTopics = true;
   const note = h('textarea', { class: 'textarea', rows: 3, id: 'f-note', value: entry?.note || '' });
-  const pageRow = h('div', { class: 'two' },
-    h('label', { class: 'field', for: 'f-page' }, pageLabel, page),
+  const noteField = h('label', { class: 'field', for: 'f-note' }, h('span', { text: 'your comment' }), note);
+  const pageField = h('label', { class: 'field', for: 'f-page' }, pageLabel, page);
+  const pageRow = h('div', { class: 'two', hidden: !place }, pageField,
     h('label', { class: 'field grow', for: 'f-source' }, h('span', { text: 'source' }), sourceSel));
+  const holder = h('div', { class: 'fields' }, pageRow, noteField, aboutIn.el, topicsIn.el, wordsBy.el);
+  function arrange() {
+    // with no source, who said it comes first; otherwise last, for a quote within a quote
+    const said = !current;
+    wordsBy.el.querySelector('.label').textContent = said ? 'said by' : 'words of (when not the author’s)';
+    wordsBy.el.querySelector('input')?.setAttribute('placeholder', said ? 'who said it' : 'a quote within the quote');
+    if (said) holder.prepend(wordsBy.el); else holder.append(wordsBy.el);
+    pageLabel.textContent = said ? 'where, when' : kindOf(current).where || 'where';
+    pageField.style.width = said ? '' : '110px';
+    pageField.classList.toggle('grow', said);
+    pageField.hidden = !said && !kindOf(current).where && !page.value;     // articles, videos: no place inside them
+    noteField.hidden = mode === 'note';
+    wordsBy.el.hidden = mode === 'note';
+  }
+  arrange();
   sourceSel.addEventListener('change', () => {
-    const s = sources.find((x) => String(x.id) === sourceSel.value);
-    pageLabel.textContent = kindOf(s).where || 'where';
-    onSourceChange?.(s);
+    current = sources.find((x) => String(x.id) === sourceSel.value) || null;
+    // from no source: whose words they were stays who said them
+    if (!current && !wordsBy.items.length && entry?.by) wordsBy.set([personItem(entry.by)]);
+    arrange();
+    onSourceChange?.(current);
   });
   return {
-    els: [pageRow, h('label', { class: 'field', for: 'f-note' }, h('span', { text: 'your note' }), note), aboutIn.el, topicsIn.el, wordsBy.el],
+    els: [holder],
     focusNote: () => note.focus(),
     about: () => aboutIn.value,
     topics: () => topicsIn.value,
+    source: () => current,
+    setMode(m) { mode = m; arrange(); },
     values() {
-      const out = { page: page.value, note: note.value, source_id: Number(sourceSel.value) };
+      const out = { page: page.value, note: note.value, source_id: sourceSel.value ? Number(sourceSel.value) : null };
       const by = wordsBy.value;
       out.words_by = by.length ? by[0] : null;
       if (touchedAbout || entry) out.about = aboutIn.value;
       if (touchedTopics || entry) out.topics = topicsIn.value;
       return out;
     },
+    // the same, as a note on the source: it carries whom and what it is about itself
+    noteValues() {
+      return { sources: sourceSel.value ? [Number(sourceSel.value)] : [], place: page.value, people: aboutIn.value, topics: topicsIn.value };
+    },
   };
 }
 
 async function viewEntryEdit({ args: [id] }) {
   const [e, sources, people, topics] = await Promise.all([api(`/api/entries/${id}`), store.sources(), store.people(), store.topics()]);
-  const source = sources.find((s) => s.id === e.source.id) || await api(`/api/sources/${e.source.id}`);
+  const source = e.source ? sources.find((s) => s.id === e.source.id) || await api(`/api/sources/${e.source.id}`) : null;
   nav.label('Edit');
-  let kind = e.kind;
   const text = h('textarea', { class: 'textarea', rows: 6, id: 'f-text', value: e.text });
-  const textLabel = h('span', { text: kind === 'quote' ? 'passage' : 'comment' });
-  const kindSeg = kindSwitch(() => kind, (k) => { kind = k; }, () => { textLabel.textContent = kind === 'quote' ? 'passage' : 'comment'; });
   const fields = entryFields({ source, sources, people, topics, entry: e });
   const msg = h('div', { class: 'note-line', role: 'alert' });
   const save = async (ev) => {
     ev.preventDefault();
+    const body = { ...fields.values(), text: text.value };
+    if (!body.source_id && !body.words_by) { msg.textContent = 'Say who said it: with no source, a quote needs a person.'; return; }
     try {
-      await api(`/api/entries/${id}`, { method: 'PATCH', body: { ...fields.values(), text: text.value, kind } });
+      await api(`/api/entries/${id}`, { method: 'PATCH', body });
       store.changed();
       toast('Saved');
       nav.finish(`entry/${id}`);
@@ -1123,13 +1243,12 @@ async function viewEntryEdit({ args: [id] }) {
   const el = h('form', { onsubmit: save },
     bar(cancelButton(`entry/${id}`), 'Edit', h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
     h('div', { class: 'details' },
-      kindSeg,
-      h('label', { class: 'field', for: 'f-text' }, textLabel, text),
+      h('label', { class: 'field', for: 'f-text' }, h('span', { text: 'passage' }), text),
       fields.els,
       e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo`, style: { alignSelf: 'flex-start' } }, 'Change the selection on the photo') : null,
       msg,
       h('button', { class: 'btn primary big', type: 'submit' }, 'Save')));
-  return { el, bare: !isWide(), nav: 'entries' };
+  return { el, bare: !isWide(), nav: 'quotes' };
 }
 
 async function viewEntryPhoto({ args: [id] }) {
@@ -1553,9 +1672,12 @@ async function viewCapture({ params }) {
       newRow('book', 'Book or ebook', 'Photo of a page or a screenshot; the book from its ISBN or back cover',
         () => go(`source/new?kind=book&then=capture${carry ? '&' + carry : ''}`)),
       newRow('link', 'Link', 'Article, video or podcast: paste the link, or share it from the app', () => stepLink('')),
-      newRow('pen', 'Something else', 'A talk, a class, a film: type its title and who gave it',
+      newRow('class', 'Class', 'A course you take: notes for each session, and quotes',
+        () => go(`source/new?kind=class&then=capture${carry ? '&' + carry : ''}`)),
+      newRow('pen', 'Something else', 'A talk, a film: type its title and who gave it',
         () => go(`source/new?kind=talk&then=capture${carry ? '&' + carry : ''}`)),
-      newRow('note', 'Note', 'Your own thoughts on a person or a topic', () => go(`note/new${carry ? '?' + carry.replace('about=', 'person=') : ''}`)),
+      newRow('said', 'Words someone said', 'Heard or read, with no source to point to', () => stepSaid('')),
+      newRow('note', 'Note', 'Your own thoughts on a person, a topic or a source', () => go(`note/new${carry ? '?' + carry.replace('about=', 'person=') : ''}`)),
       h('div', { class: 'list-end' }),
       h('div', { class: 'pad' }, h('button', { class: 'btn', type: 'button', style: { alignSelf: 'flex-start' }, onclick: () => stepLater(null) },
         icon('inbox', 18), 'Photos to sort later')));
@@ -1586,7 +1708,7 @@ async function viewCapture({ params }) {
     source = s;
     prefs.set('captureSource', s.id);
     const k = kindOf(s);
-    if (!k.photos) { stepDetails(null); return; }
+    if (!k.photos) { stepDetails(null, false, k.notesFirst ? 'note' : 'quote'); return; }
     const fileInput = (useCamera) => h('input', { type: 'file', accept: 'image/*', capture: useCamera ? 'environment' : null,
       'aria-label': useCamera ? 'Take a photo' : 'Choose a photo', onchange: (ev) => { const f = ev.target.files[0]; if (f) send(f); } });
     const drop = h('div', { class: 'drop wide-only' }, 'or drop a photo or a screenshot here');
@@ -1598,12 +1720,14 @@ async function viewCapture({ params }) {
       h('div', { class: 'capture-start' },
         sourceChoice(s, () => stepPick((x) => stepSource(x))),
         root.dataset.error ? h('div', { class: 'error', role: 'alert', text: root.dataset.error }) : null,
+        k.notesFirst ? h('button', { class: 'btn primary big', type: 'button', onclick: () => stepDetails(null, false, 'note') }, icon('note', 20), 'Write a note') : null,
         coarse()
-          ? [h('label', { class: 'btn primary big file-btn' }, icon('camera', 20), 'Take a photo', fileInput(true)),
+          ? [h('label', { class: `btn ${k.notesFirst ? '' : 'primary '}big file-btn` }, icon('camera', 20), 'Take a photo', fileInput(true)),
             h('label', { class: 'btn big file-btn' }, icon('image', 20), s.kind === 'ebook' ? 'Choose a screenshot' : 'Choose a photo', fileInput(false))]
-          : [h('label', { class: 'btn primary big file-btn' }, icon('image', 20), 'Choose a photo or a screenshot', fileInput(false)), drop],
+          : [h('label', { class: `btn ${k.notesFirst ? '' : 'primary '}big file-btn` }, icon('image', 20), 'Choose a photo or a screenshot', fileInput(false)), drop],
         h('button', { class: 'btn big', type: 'button', onclick: () => stepLater(s) }, icon('inbox', 20), 'Several pages, sort later'),
-        h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Type it')));
+        h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Type a quote'),
+        k.notesFirst ? null : h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null, false, 'note') }, icon('note', 20), 'Write a note')));
     delete root.dataset.error;
   }
 
@@ -1711,8 +1835,42 @@ async function viewCapture({ params }) {
       row('link', 'A web page, a video or a podcast', 'Paste its link; the passage is kept with it', () => stepLink('', '', sh.text)),
       row('book', 'A book, a talk, anything else', 'Type its title and who wrote it',
         () => go(`source/new?kind=${b ? 'ebook' : 'book'}&then=capture${carry ? '&' + carry : ''}${sharedCarry()}`)),
-      row('note', 'Your own note', 'Keep it as a note on a person or a topic', () => go(`note/new?shared=1${carry ? '&' + carry.replace('about=', 'person=') : ''}`)),
+      row('said', 'Someone said it', 'Who said it, with no source to point to', () => stepSaid(sh.text)),
+      row('note', 'Your own note', 'Keep it as a note on a person, a topic or a source', () => go(`note/new?shared=1${carry ? '&' + carry.replace('about=', 'person=') : ''}`)),
       h('div', { class: 'list-end' }));
+  }
+
+  // words someone said, heard or read, with no source to point to
+  function stepSaid(said = '', who = null) {
+    cleanup();
+    root.classList.remove('fill-screen');
+    source = null;
+    const text = h('textarea', { class: 'textarea', rows: 5, id: 'c-text', value: said });
+    const fields = entryFields({ source: null, sources, people, topics, entry: who ? { by: who, about: [], topics: [] } : null,
+      about: aboutPreset?.length ? aboutPreset : null, topicNames: topicPreset?.length ? topicPreset : null });
+    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Save');
+    const save = async (ev) => {
+      ev.preventDefault();
+      if (!text.value.trim()) { text.focus(); toast('The words are empty'); return; }
+      const body = { ...fields.values(), text: text.value };
+      if (!body.source_id && !body.words_by) { document.querySelector('#f-by')?.focus(); toast('Say who said it'); return; }
+      saveBtn.disabled = true;
+      try {
+        const e = await api('/api/entries', { method: 'POST', body });
+        store.changed();
+        if (shared) finishShared();
+        nav.flash = { entry: e.id };
+        nav.finish(e.source ? `source/${e.source.id}` : `person/${e.by.id}`);
+        toast('Saved');
+      } catch (err) { saveBtn.disabled = false; toast(err.message); }
+    };
+    put(root, h('form', { onsubmit: save, class: 'fill-form' },
+      bar(startedHere || shared ? backTo(home) : leave(), 'Words someone said'),
+      h('div', { class: 'details' },
+        h('label', { class: 'field', for: 'c-text' }, h('span', { text: 'what was said' }), text),
+        fields.els),
+      h('div', { class: 'save-bar' }, saveBtn)));
+    setTimeout(() => (who ? text : document.getElementById('f-by'))?.focus(), 50);
   }
 
   async function send(file) {
@@ -1754,24 +1912,40 @@ async function viewCapture({ params }) {
     root.classList.add('fill-screen');
   }
 
-  function stepDetails(selectedText, typedWithPhoto) {
+  function stepDetails(selectedText, typedWithPhoto, startMode) {
     cleanup();
     root.classList.remove('fill-screen');
     const fromPhoto = Boolean(photo && selectedText != null && !typedWithPhoto);
     const k = kindOf(source);
-    let kind = fromPhoto || !(source.kind === 'video' || source.kind === 'podcast') ? 'quote' : 'comment';
+    let mode = fromPhoto ? 'quote' : startMode || (k.notesFirst && !selectedText ? 'note' : 'quote');
     const text = h('textarea', { class: 'textarea', rows: fromPhoto ? 5 : 6, id: 'c-text', value: selectedText || '' });
-    const textLabel = h('span', { text: kind === 'quote' ? 'passage' : 'comment' });
-    const kindSeg = kindSwitch(() => kind, (x) => { kind = x; }, () => { textLabel.textContent = kind === 'quote' ? 'passage' : 'comment'; });
-    const fields = entryFields({ source, sources, people, topics, about: aboutPreset?.length ? [...source.people.about, ...aboutPreset.filter((p) => !source.people.about.some((a) => a.id === p.id))] : null,
+    const textLabel = h('span');
+    const fields = entryFields({ source, sources, people, topics, mode, about: aboutPreset?.length ? [...source.people.about, ...aboutPreset.filter((p) => !source.people.about.some((a) => a.id === p.id))] : null,
       topicNames: topicPreset?.length ? [...new Set([...source.topics.map((t) => t.name), ...topicPreset])] : null });
+    const showMode = () => { textLabel.textContent = mode === 'quote' ? 'passage' : 'note'; fields.setMode(mode); };
+    const modeSeg = modeSwitch(() => mode, (x) => { mode = x; }, showMode);
+    showMode();
     const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Save');
+    const saveNote = async () => {
+      const n = await api('/api/notes', { method: 'POST', body: { ...fields.noteValues(), text: text.value } });
+      store.changed();
+      if (shared) finishShared();
+      const sid = n.sources[0]?.id;
+      nav.flash = { note: n.id };
+      nav.finish(sid ? `source/${sid}` : `note/${n.id}`);
+      toast('Note saved');
+    };
     const save = async (ev) => {
       ev.preventDefault();
       if (!text.value.trim()) { text.focus(); toast('The text is empty'); return; }
       saveBtn.disabled = true;
+      if (mode === 'note') {
+        try { await saveNote(); } catch (err) { saveBtn.disabled = false; toast(err.message); }
+        return;
+      }
       try {
-        const body = { ...fields.values(), kind, text: text.value };
+        const body = { ...fields.values(), text: text.value };
+        if (!body.source_id && !body.words_by) { saveBtn.disabled = false; toast('Say who said it'); return; }
         if (fromPhoto) Object.assign(body, { photo_id: photo.id, word_start: range.start, word_end: range.end });
         const e = await api('/api/entries', { method: 'POST', body });
         prefs.set('captureSource', body.source_id);
@@ -1782,7 +1956,7 @@ async function viewCapture({ params }) {
         } else {
           if (shared) finishShared();
           nav.flash = { entry: e.id };
-          nav.finish(`source/${body.source_id}`);
+          nav.finish(body.source_id ? `source/${body.source_id}` : `person/${e.by.id}`);
           toast('Saved', fromPhoto ? { label: 'Another from this page', run: () => go('capture?again=1') } : null);
         }
       } catch (err) { saveBtn.disabled = false; toast(err.message); }
@@ -1795,7 +1969,7 @@ async function viewCapture({ params }) {
         k.link && !photo ? sourceChoice(source, shared
           ? () => { shared.text = text.value; stepPick((s) => { source = s; stepDetails(shared.text); }, () => stepDetails(shared.text)); }
           : () => stepPick((s) => { source = s; stepSource(s); })) : null,
-        fromPhoto ? null : kindSeg,
+        fromPhoto ? null : modeSeg,
         h('label', { class: 'field', for: 'c-text' }, textLabel, text),
         source.url && !photo ? h('a', { class: 'filter ink', href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `open the ${source.kind === 'article' ? 'article' : source.kind} ›`) : null,
         fields.els),
@@ -1852,11 +2026,10 @@ async function viewCapture({ params }) {
 
   function linkForm(info, quoted, note, pageTitle) {
     // info: details of a new source to create; null when the link is already in the library (source is set)
-    let kind = quoted ? 'quote' : 'comment';
+    let mode = quoted ? 'quote' : 'note';
     let sourceKind = info?.kind || source?.kind;
     const text = h('textarea', { class: 'textarea', rows: 5, id: 'c-text', value: quoted || '' });
-    const textLabel = h('span', { text: kind === 'quote' ? 'passage' : 'comment' });
-    const kindSeg = kindSwitch(() => kind, (x) => { kind = x; }, () => { textLabel.textContent = kind === 'quote' ? 'passage' : 'comment'; });
+    const textLabel = h('span');
     const title = field('l-title', 'title', { required: true }, info ? info.title || pageTitle || '' : '');
     const site = field('l-site', 'site', {}, info?.site || '');
     const date = field('l-date', 'date', { placeholder: '2026-10-02', inputmode: 'numeric' }, info?.date || '');
@@ -1869,8 +2042,11 @@ async function viewCapture({ params }) {
       makersIn.el.querySelector('.label').textContent = KINDS[k2].makerLabel;
     };
     const pseudo = source || { id: 0, kind: sourceKind, people: { about: [] }, topics: [] };
-    const fields = entryFields({ source: pseudo, sources: source ? sources : [{ ...pseudo, title: 'this new source' }], people, topics,
+    const fields = entryFields({ source: pseudo, sources: source ? sources : [{ ...pseudo, title: 'this new source' }], people, topics, mode, place: false,
       about: aboutPreset?.length ? aboutPreset : null, topicNames: topicPreset?.length ? topicPreset : null });
+    const showMode = () => { textLabel.textContent = mode === 'quote' ? 'passage' : 'note'; fields.setMode(mode); };
+    const modeSeg = modeSwitch(() => mode, (x) => { mode = x; }, showMode);
+    showMode();
     const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Save');
     const save = async (ev) => {
       ev.preventDefault();
@@ -1892,10 +2068,17 @@ async function viewCapture({ params }) {
           delete values.about;
           delete values.topics;
         }
-        const e = await api('/api/entries', { method: 'POST', body: { ...values, source_id: sid, kind, text: text.value } });
+        let flash;
+        if (mode === 'note') {
+          const n = await api('/api/notes', { method: 'POST', body: { ...fields.noteValues(), sources: [sid], text: text.value } });
+          flash = { note: n.id };
+        } else {
+          const e = await api('/api/entries', { method: 'POST', body: { ...values, source_id: sid, text: text.value } });
+          flash = { entry: e.id };
+        }
         store.changed();
         finishShared();
-        nav.flash = { entry: e.id, cover: info?.image_url ? sid : null };
+        nav.flash = { ...flash, cover: info?.image_url ? sid : null };
         nav.replace(`source/${sid}`);
         toast('Saved');
       } catch (err) { saveBtn.disabled = false; toast(err.message); }
@@ -1912,9 +2095,9 @@ async function viewCapture({ params }) {
           makersIn.el,
           h('p', { class: 'note-line link-line', text: info.url })],
         h('hr', { class: 'rule' }),
-        kindSeg,
+        modeSeg,
         h('label', { class: 'field', for: 'c-text' }, textLabel, text),
-        fields.els.slice(1)),
+        fields.els),
       h('div', { class: 'save-bar' }, saveBtn)));
     if (!quoted) setTimeout(() => text.focus(), 50);
   }
@@ -1925,6 +2108,9 @@ async function viewCapture({ params }) {
     source = sources.find((s) => s.id === photo.source_id);
     if (source) stepSelect();
     else stepPick(async (s) => { source = s; await api(`/api/photos/${photo.id}`, { method: 'PATCH', body: { source_id: s.id } }).catch(() => null); stepSelect(); });
+  } else if (params.get('said')) {
+    const who = people.find((p) => String(p.id) === params.get('said'));
+    stepSaid('', who || null);
   } else if (params.has('share')) {
     // from the iPhone Shortcut: whatever another app shared (a passage, a link, or both)
     const raw = sharedParam();
@@ -2195,7 +2381,7 @@ async function viewPersonForm({ args: [id] }) {
   };
   const others = people.filter((x) => x.id !== p.id);
   const mergeSel = h('select', { class: 'select', id: 'p-merge' }, h('option', { value: '' }, '—'),
-    others.map((x) => h('option', { value: String(x.id) }, `${x.sort_name}${x.entries ? ` (${plural(x.entries, 'entry')})` : ''}`)));
+    others.map((x) => h('option', { value: String(x.id) }, `${x.sort_name}${x.entries ? ` (${plural(x.entries, 'quote')})` : ''}`)));
   const merge = async () => {
     const other = others.find((x) => String(x.id) === mergeSel.value);
     if (!other) { msg.textContent = 'Choose who this is'; return; }
@@ -2273,7 +2459,7 @@ async function viewNotes({ params }) {
   const list = h('div');
   const input = h('input', { type: 'search', placeholder: 'Search your notes', 'aria-label': 'Search your notes', value: q, enterkeyhint: 'search' });
   const draw = () => put(list, notes.length ? [notes.map((n) => noteBlock(n)), h('div', { class: 'list-end' })]
-    : h('div', { class: 'empty' }, q ? 'No note contains these words.' : 'Your own thoughts on a person or a topic go here.',
+    : h('div', { class: 'empty' }, q ? 'No note contains these words.' : 'Your own writing goes here: on a book, a video, a class, a person or a topic.',
       q ? null : h('a', { class: 'btn primary', href: '#/note/new' }, 'Write a note')));
   input.addEventListener('input', debounce(async () => {
     q = input.value.trim();
@@ -2306,6 +2492,8 @@ async function viewNote({ args: [id] }) {
     h('article', { class: 'entry-page note-page' },
       n.title ? h('h1', { text: n.title }) : null,
       h('div', { class: 'kv' }, joinDots([fullDate(n.created_at), n.updated_at !== n.created_at ? `changed ${fullDate(n.updated_at)}` : null])),
+      n.sources.length ? h('div', { class: 'note-sources' }, n.sources.map((src) => h('a', { class: 'plink it', href: `#/source/${src.id}`, text: src.title })),
+        n.place ? h('span', { class: 'muted', text: `, ${placeText(n.place)}` }) : null) : n.place ? h('div', { class: 'kv', text: placeText(n.place) }) : null,
       h('p', { class: 'note-body', text: n.text }),
       n.people.length ? h('p', { class: 'kv-line' }, h('span', { class: 'label', text: 'on ' }), personLinks(n.people)) : null,
       n.topics.length ? topicLinks(n.topics) : null,
@@ -2318,14 +2506,16 @@ async function viewNote({ args: [id] }) {
 
 async function viewNoteForm({ args: [id], params }) {
   const editing = id != null;
-  const [note, people, topics] = await Promise.all([editing ? api(`/api/notes/${id}`) : null, store.people(), store.topics()]);
+  const [note, people, topics, sources] = await Promise.all([editing ? api(`/api/notes/${id}`) : null, store.people(), store.topics(), store.sources()]);
   nav.label(editing ? 'Edit' : 'New note');
-  const n = note || { title: '', text: '', people: [], topics: [], entries: [] };
+  const n = note || { title: '', text: '', place: '', sources: [], people: [], topics: [], entries: [] };
   if (!editing) {
     const person = people.find((p) => String(p.id) === params.get('person'));
     const topic = topics.find((t) => String(t.id) === params.get('topic'));
+    const source = sources.find((x) => String(x.id) === params.get('source'));
     if (person) n.people = [person];
     if (topic) n.topics = [topic];
+    if (source) n.sources = [source];
     if (params.get('shared')) {
       try { n.text = JSON.parse(sessionStorage.getItem('marginote.shared'))?.text || ''; } catch { /* nothing kept */ }
     }
@@ -2341,11 +2531,15 @@ async function viewNoteForm({ args: [id], params }) {
   let linked = [...n.entries];
   const title = field('n-title', 'title, if you want one', {}, n.title);
   const text = h('textarea', { class: 'textarea note-input', rows: 10, id: 'n-text', value: n.text });
+  const sourcesIn = sourcesInput('on (a book, a video, a class…)', n.sources.map((x) => sources.find((y) => y.id === x.id) || x), sources,
+    { id: 'n-sources', onchange: (items) => { placeBox.hidden = !items.length; } });
+  const place = field('n-place', 'where in it (page, chapter, session)', { placeholder: 'Séance 3, p. 57…' }, n.place || '');
+  const placeBox = h('div', { hidden: !n.sources.length }, place.el);
   const peopleIn = peopleInput('people', n.people, people, { id: 'n-people', placeholder: 'who it is about' });
   const topicsIn = topicsInput('topics', n.topics.map((t) => t.name), topics, { id: 'n-topics' });
   const linkedBox = h('div');
   const finder = h('div', { class: 'finder', hidden: true });
-  const findInput = h('input', { type: 'search', placeholder: 'Words of the quote, its source, a person', 'aria-label': 'Find a quote or comment' });
+  const findInput = h('input', { type: 'search', placeholder: 'Words of the quote, its source, a person', 'aria-label': 'Find a quote' });
   const found = h('div');
   findInput.addEventListener('input', debounce(async () => {
     const q = findInput.value.trim();
@@ -2354,13 +2548,13 @@ async function viewNoteForm({ args: [id], params }) {
       const hits = await api(`/api/search?q=${encodeURIComponent(q)}&limit=12`);
       put(found, hits.filter((e) => !linked.some((x) => x.id === e.id)).map((e) => h('button', { type: 'button', class: 'pick',
         onclick: () => { linked.push(e); drawLinked(); finder.hidden = true; findInput.value = ''; put(found); } },
-      h('span', { class: 'main' }, h('span', { class: 'txt2', text: shorten(e.text, 140) }), h('span', { class: 'a', text: `${e.source.title}${e.page ? ', ' + where(e) : ''}` })))));
+      h('span', { class: 'main' }, h('span', { class: 'txt2', text: shorten(e.text, 140) }), h('span', { class: 'a', text: citation(e, e.source) })))));
     } catch (err) { put(found, errorBox(err)); }
   }, 300));
   put(finder, h('label', { class: 'search' }, icon('search', 16), findInput), found);
   function drawLinked() {
     put(linkedBox, linked.map((e) => h('div', { class: 'linked-row' },
-      h('span', { class: 'main' }, h('span', { class: 'txt2', text: shorten(e.text, 110) }), h('span', { class: 'a', text: `${e.source.title}${e.page ? ', ' + where(e) : ''}` })),
+      h('span', { class: 'main' }, h('span', { class: 'txt2', text: shorten(e.text, 110) }), h('span', { class: 'a', text: citation(e, e.source) })),
       h('button', { type: 'button', class: 'x', 'aria-label': 'Remove this reference', onclick: () => { linked = linked.filter((x) => x !== e); drawLinked(); } }, '×'))));
   }
   drawLinked();
@@ -2368,7 +2562,8 @@ async function viewNoteForm({ args: [id], params }) {
   const save = async (ev) => {
     ev.preventDefault();
     if (!text.value.trim()) { text.focus(); msg.textContent = 'The note is empty'; return; }
-    const body = { title: title.input.value, text: text.value, people: peopleIn.value, topics: topicsIn.value, entries: linked.map((e) => e.id) };
+    const body = { title: title.input.value, text: text.value, sources: sourcesIn.value, place: sourcesIn.value.length ? place.input.value : '',
+      people: peopleIn.value, topics: topicsIn.value, entries: linked.map((e) => e.id) };
     try {
       if (editing) {
         await api(`/api/notes/${id}`, { method: 'PATCH', body });
@@ -2380,7 +2575,8 @@ async function viewNoteForm({ args: [id], params }) {
         store.changed();
         if (params.get('shared')) finishShared();
         toast('Note saved');
-        if (nav.prev() && (params.get('person') || params.get('topic') || params.get('entry'))) nav.back(`note/${created.id}`);
+        if (params.get('source')) nav.flash = { note: created.id };
+        if (nav.prev() && (params.get('person') || params.get('topic') || params.get('entry') || params.get('source'))) nav.back(`note/${created.id}`);
         else nav.replace(`note/${created.id}`);
       }
     } catch (err) { msg.textContent = err.message; }
@@ -2390,11 +2586,12 @@ async function viewNoteForm({ args: [id], params }) {
     h('div', { class: 'details' },
       title.el,
       h('label', { class: 'field', for: 'n-text' }, h('span', { text: 'note' }), text),
+      sourcesIn.el, placeBox,
       topicsIn.el, peopleIn.el,
       h('div', { class: 'field' }, h('span', { class: 'label', text: 'refers to (optional)' }), linkedBox,
         h('button', { type: 'button', class: 'btn small', style: { alignSelf: 'flex-start', marginTop: '6px' },
-          onclick: () => { finder.hidden = !finder.hidden; if (!finder.hidden) findInput.focus(); } }, '+ Link a quote or comment'), finder),
-      h('p', { class: 'note-line', text: 'Shown at the top of the page of each topic and person it is on.' }),
+          onclick: () => { finder.hidden = !finder.hidden; if (!finder.hidden) findInput.focus(); } }, '+ Link a quote'), finder),
+      h('p', { class: 'note-line', text: 'Shown on the page of each source, person and topic it is on.' }),
       msg,
       h('button', { class: 'btn primary big', type: 'submit' }, 'Save')));
   if (!editing) setTimeout(() => text.focus(), 50);
@@ -2495,10 +2692,10 @@ function buildShell() {
       link('library', '#/', 'Library'),
       h('div', { class: 'sub' }, link('lib-sources', '#/?view=sources', 'Sources'), link('lib-people', '#/?view=people', 'People'),
         link('lib-topics', '#/?view=topics', 'Topics')),
-      link('entries', '#/entries', 'Entries'), link('notes', '#/notes', 'Notes'),
+      link('quotes', '#/quotes', 'Quotes'), link('notes', '#/notes', 'Notes'),
       link('inbox', '#/inbox', 'Inbox'), link('settings', '#/settings', 'Settings')));
   const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Main' },
-    link('library', '#/', 'Library'), link('entries', '#/entries', 'Entries'), link('notes', '#/notes', 'Notes'),
+    link('library', '#/', 'Library'), link('quotes', '#/quotes', 'Quotes'), link('notes', '#/notes', 'Notes'),
     h('span', { class: 'tab-capture' }, h('a', { class: 'btn primary', href: '#/capture' }, '+ Capture')));
   const main = h('main', { class: 'view', id: 'view' });
   put(document.body, h('div', { class: 'app', id: 'app' }, side, main, tabbar));
@@ -2514,7 +2711,7 @@ const ROUTES = [
   [/^person\/(\d+)\/edit$/, viewPersonForm],
   [/^topic\/(\d+)$/, viewTopic],
   [/^topic\/(\d+)\/edit$/, viewTopicForm],
-  [/^entries$/, viewEntries, true],
+  [/^quotes$/, viewEntries, true],
   [/^entry\/(\d+)$/, viewEntry],
   [/^entry\/(\d+)\/edit$/, viewEntryEdit],
   [/^entry\/(\d+)\/photo$/, viewEntryPhoto],
@@ -2525,9 +2722,9 @@ const ROUTES = [
   [/^capture$/, viewCapture, (params) => ![...params.keys()].length],
   [/^inbox$/, viewInbox, true],
   [/^settings$/, viewSettings, true],
-  // addresses of version 0.4, from bookmarks or the home screen
+  // addresses of earlier versions, from bookmarks or the home screen
+  [/^entries$/, ({ params }) => { nav.replace(`quotes${params.toString() ? '?' + params : ''}`); return null; }],
   [/^book\/(\d+)$/, ({ args: [id] }) => { nav.replace(`source/${id}`); return null; }],
-  [/^quotes$/, () => { nav.replace('entries'); return null; }],
   [/^tags$/, () => { nav.replace('?view=topics'); return null; }],
 ];
 

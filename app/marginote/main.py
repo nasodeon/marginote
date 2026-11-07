@@ -24,9 +24,9 @@ from . import backup, db, dewarp, ocr, routes_admin, routes_entries, routes_libr
 from .config import Settings, load_settings
 from .context import Context
 
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 # the release that gave the database its current shape: names the copy made before upgrading to it
-SHAPE_CHANGED_IN = "0.5.0"
+SHAPE_CHANGED_IN = "0.6.0"
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("marginote")
 mimetypes.add_type("application/manifest+json", ".webmanifest")

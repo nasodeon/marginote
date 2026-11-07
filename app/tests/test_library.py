@@ -33,7 +33,8 @@ def add(client, **body):
 
 def section(page, key):
     found = next((s for s in page["sections"] if s["key"] == key), None)
-    return {g["source"]["title"]: [e["text"] for e in g["entries"]] for g in found["groups"]} if found else None
+    return {(g["source"]["title"] if g["source"] else None): [e["text"] for e in g["entries"]]
+            for g in found["groups"]} if found else None
 
 
 # ---------- names ----------
@@ -217,12 +218,12 @@ def test_notes_on_people_and_topics(logged_in):
 
 # ---------- sources of any kind ----------
 
-def test_a_video_its_comments_and_an_article_quote_link(logged_in):
+def test_a_video_its_notes_and_an_article_quote_link(logged_in):
     v = new(logged_in, kind="video", title="Spinoza : le conatus expliqué", url="https://youtu.be/abc?si=x",
             publisher="Philosophie à voix haute", date="2024-03", people={"about": ["Baruch Spinoza"]})
     assert v["url"] == "https://www.youtube.com/watch?v=abc" and v["date"] == "2024-03" and v["year"] is None
-    c = add(logged_in, source_id=v["id"], kind="comment", text="Exposé clair.")
-    assert c["link"] == v["url"] and c["by"] is None and c["page"] is None
+    c = logged_in.post("/api/notes", json={"sources": [v["id"]], "text": "Exposé clair."}).json()
+    assert c["sources"][0]["id"] == v["id"]
     assert logged_in.post("/api/sources", json={"kind": "video", "title": "Doublon", "url": "youtube.com/watch?v=abc"}).status_code == 409
     assert logged_in.post("/api/sources", json={"title": "x", "date": "2 octobre"}).status_code == 422
     assert logged_in.post("/api/sources", json={"title": "x", "kind": "film"}).status_code == 422
@@ -236,6 +237,62 @@ def test_a_video_its_comments_and_an_article_quote_link(logged_in):
     assert kinds == {"video", "article"}
     assert [s["title"] for s in logged_in.get("/api/sources", params={"kind": "video"}).json()] == [v["title"]]
     assert [e["id"] for e in logged_in.get("/api/entries", params={"medium": "article"}).json()] == [long["id"], q["id"]]
+
+
+def test_words_someone_said_with_no_source(logged_in):
+    said = add(logged_in, text="Le capitalisme est un régime de désir.", words_by="Frédéric Lordon",
+               page="France Inter, 2024", about=["Baruch Spinoza"], topics=["désir"], note="À vérifier.")
+    assert said["source"] is None and said["by"]["name"] == "Frédéric Lordon" and said["page"] == "France Inter, 2024"
+    assert said["link"] is None and [p["name"] for p in said["about"]] == ["Baruch Spinoza"]
+    assert not said["about"][0]["from_source"]
+    assert logged_in.post("/api/entries", json={"text": "Personne ne l'a dit."}).status_code == 422
+    people = {p["name"]: p for p in logged_in.get("/api/people").json()}
+    lordon, spinoza = people["Frédéric Lordon"], people["Baruch Spinoza"]
+    assert lordon["said"] == 1 and lordon["entries"] == 1 and spinoza["about_in"] == 0
+
+    page = logged_in.get(f"/api/people/{lordon['id']}").json()
+    assert section(page, "said") == {None: [said["text"]]}
+    assert section(logged_in.get(f"/api/people/{spinoza['id']}").json(), "about") == {None: [said["text"]]}
+    assert [e["id"] for e in logged_in.get("/api/entries", params={"medium": "said"}).json()] == [said["id"]]
+    assert logged_in.get("/api/search", params={"q": "france inter"}).json()[0]["id"] == said["id"]
+    topic = next(t for t in logged_in.get("/api/topics").json() if t["name"] == "désir")
+    assert topic["entries"] == 1 and topic["sources"] == 0
+    # its author cannot be deleted while it is theirs, only merged
+    assert logged_in.delete(f"/api/people/{lordon['id']}").status_code == 409
+
+    # a quote from a book, then from no source: it stays its author's words
+    book = new(logged_in, title="Imperium", people={"author": ["Frédéric Lordon"]}, topics=["État"])
+    q = add(logged_in, source_id=book["id"], text="Les corps politiques.")
+    loose = logged_in.patch(f"/api/entries/{q['id']}", json={"source_id": None}).json()
+    assert loose["source"] is None and loose["by"]["name"] == "Frédéric Lordon"
+    assert [t["name"] for t in loose["topics"]] == ["État"]          # what it was about stays
+    back = logged_in.patch(f"/api/entries/{q['id']}", json={"source_id": book["id"]}).json()
+    assert back["source"]["id"] == book["id"] and back["by"]["name"] == "Frédéric Lordon"
+
+
+def test_classes_and_notes_on_a_persons_works(logged_in):
+    course = new(logged_in, kind="class", title="Histoire de l'art moderne", publisher="Université d'exemple",
+                 year=2026, people={"speaker": ["Jeanne Dupont"]}, topics=["information"])
+    assert course["kind"] == "class"
+    n1 = logged_in.post("/api/notes", json={"sources": [course["id"]], "place": "Séance 3", "text": "Les fauves."}).json()
+    n2 = logged_in.post("/api/notes", json={"sources": [course["id"]], "place": "Séance 1", "text": "Manet et Monet."}).json()
+    assert [n["id"] for n in logged_in.get("/api/notes", params={"source_id": course["id"], "order": "place"}).json()] \
+        == [n2["id"], n1["id"]]
+    q = add(logged_in, source_id=course["id"], text="La couleur avant le dessin.")
+    assert q["by"]["name"] == "Jeanne Dupont"
+    dupont = next(p for p in logged_in.get("/api/people").json() if p["name"] == "Jeanne Dupont")
+    page = logged_in.get(f"/api/people/{dupont['id']}").json()
+    works = next(s for s in page["sections"] if s["key"] == "works")
+    group = works["groups"][0]
+    assert group["source"]["id"] == course["id"] and [e["id"] for e in group["entries"]] == [q["id"]]
+    assert {n["id"] for n in group["notes"]} == {n1["id"], n2["id"]}
+    # a note on her and on her class is shown once, with the class
+    on_both = logged_in.post("/api/notes", json={"sources": [course["id"]], "people": [dupont["id"]], "text": "Très claire."}).json()
+    page = logged_in.get(f"/api/people/{dupont['id']}").json()
+    assert on_both["id"] in {n["id"] for n in page["sections"][0]["groups"][0]["notes"]}
+    assert on_both["id"] not in {n["id"] for n in page["notes"]}
+    listed = next(s for s in logged_in.get("/api/sources").json() if s["id"] == course["id"])
+    assert listed["note_count"] == 3 and listed["quote_count"] == 1
 
 
 def test_moving_an_entry_keeps_whom_it_is_about_and_takes_its_photo(logged_in, settings):
@@ -386,7 +443,8 @@ def test_upgrade_from_version_0_4_keeps_everything(settings):
         assert [p["name"] for p in sources[7]["people"]["translator"]] == ["Charles Appuhn"]
         quote = c.get("/api/entries/11").json()
         assert quote["note"] == "à relire" and quote["page"] == "57" and [t["name"] for t in quote["topics"]] == ["conatus"]
-        assert c.get("/api/entries/12").json()["kind"] == "comment"
+        assert c.get("/api/entries/12").status_code == 404     # a comment: now a note on its source
+        assert [n["text"] for n in c.get("/api/notes", params={"source_id": 3}).json()] == ["Rhizome."]
         photo = c.get("/api/photos/ph1").json()
         assert [w["text"] for w in photo["words"]][:2] == ["Chaque", "chose"] and photo["source_id"] == 7
         assert c.post("/api/photos/ph1/select", json={"start": 0, "end": 2}).json()["text"] == "Chaque chose s'efforce"
@@ -394,7 +452,7 @@ def test_upgrade_from_version_0_4_keeps_everything(settings):
         assert c.get("/api/search", params={"q": "appuhn"}).json()[0]["id"] == 11
         status = c.get("/api/backup/status").json()
         before = [x for x in status["copies"] if x["kind"] == "before upgrade"]
-        assert len(before) == 1 and before[0]["file"].startswith("before-0.5.0-")
+        assert len(before) == 1 and before[0]["file"].startswith("before-0.6.0-")
     # the copy made before the upgrade is the old database, ready to go back to version 0.4
     copy = next(settings.backups_dir.glob("before-*.zip"))
     old = settings.data_dir / "old.db"
@@ -409,6 +467,44 @@ def test_upgrade_from_version_0_4_keeps_everything(settings):
     assert len(list(settings.backups_dir.glob("before-*.zip"))) == 1
     conn = sqlite3.connect(settings.db_path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.LATEST
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
+
+
+def test_upgrade_from_version_0_5_turns_comments_into_notes(settings, monkeypatch):
+    settings.data_dir.mkdir(parents=True)
+    make_v4_database(settings.db_path)
+    with monkeypatch.context() as m:          # a database as version 0.5 left it
+        m.setattr(db, "LATEST", 5)
+        m.setattr(db, "_to_v6", lambda conn: None)
+        db.migrate(settings.db_path)
+    conn = db.connect(settings.db_path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    t = "2026-11-02T10:00:00Z"
+    bergson = db.person_id(conn, "Henri Bergson")
+    conn.execute("INSERT INTO entry_people (entry_id, person_id, included) VALUES (12, ?, 1)", (bergson,))
+    conn.execute("INSERT INTO notes (id, title, text, created_at, updated_at) VALUES (4, 'Lien', 'Voir le rhizome.', ?, ?)", (t, t))
+    conn.execute("INSERT INTO note_entries (note_id, entry_id, position) VALUES (4, 12, 0), (4, 11, 1)")
+    conn.execute("UPDATE entries SET note = 'Chapitre 1.', page = '9' WHERE id = 12")
+    conn.commit()
+    conn.close()
+    with TestClient(create_app(settings)) as c:
+        c.post("/api/login", json={"password": "correct horse"})
+        assert c.get("/api/entries/12").status_code == 404
+        quote = c.get("/api/entries/11").json()
+        assert quote["note"] == "à relire" and quote["source"]["id"] == 7
+        rhizome = next(n for n in c.get("/api/notes", params={"source_id": 3}).json() if n["text"].startswith("Rhizome."))
+        assert rhizome["text"] == "Rhizome.\n\nChapitre 1." and rhizome["place"] == "9"
+        assert [p["name"] for p in rhizome["people"]] == ["Henri Bergson"] and rhizome["created_at"] == "2026-11-01T10:00:00Z"
+        lien = c.get("/api/notes/4").json()
+        assert [s["id"] for s in lien["sources"]] == [3] and [e["id"] for e in lien["entries"]] == [11]
+        assert {s["id"]: s["note_count"] for s in c.get("/api/sources").json()}[3] == 2
+        assert {n["id"] for n in c.get("/api/notes", params={"q": "mille plateaux"}).json()} == {4, rhizome["id"]}
+        before = [x["file"] for x in c.get("/api/backup/status").json()["copies"] if x["kind"] == "before upgrade"]
+        assert len(before) == 1 and before[0].startswith("before-0.6.0-")
+        assert c.post("/api/sources", json={"kind": "class", "title": "Un cours", "fetch_cover": False}).status_code == 201
+    conn = sqlite3.connect(settings.db_path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()
 

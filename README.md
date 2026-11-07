@@ -1,23 +1,31 @@
 # Marginote
 
-Self-hosted quotes and notes on what you read, watch and listen to: books, ebooks, articles, videos,
-podcasts, talks. Photograph a page or share a link, keep the passage or a comment, say whom and what it is
-about, and find it again by source, by person or by topic. Your notes and photos stay on your own server;
+Self-hosted quotes and notes on what you read, watch, listen to and study: books, ebooks, articles, videos,
+podcasts, classes, talks. Photograph a page or share a link, keep the passage or write a note, say whom and
+what it is about, and find it again by source, by person or by topic. Your notes and photos stay on your own server;
 the app is reachable only through your private Tailscale network.
 
 ## How it is organised
 
-- **Sources**: anything you quote from or comment on. A book (page photos, ISBN, cover), an ebook
-  (screenshots), an article (its link opens the page at the passage you kept), a video or podcast (a link
-  and comments on the whole), a talk or class, or anything else.
-- **People**: who made a source (author, translator, editor, speaker) and whom it is about. Each person has
-  a page with four sections: your notes on them, their works, their words quoted elsewhere, and what is
-  about them. A passage by Lordon about Spinoza is stored once and shows on both pages.
-- **Topics**: today's tags, each with a page: your notes, the people who appear in it, topics often found
-  with it, its entries grouped by person, source or date.
-- **Notes**: your own writing on people and topics, shown at the top of their pages.
+- **Quotes**: passages, each with your comment if you want one. Taken from a source, or words someone said
+  with no source to point to (a talk heard, a radio interview): then just who said it, and where or when.
+- **Notes**: your own writing. A note can be on sources (a book, a video, a class: with the page or the
+  session), on people and on topics, all optional; it shows on each of their pages.
+- **Sources**: anything you quote from or write about. A book (page photos, ISBN, cover), an ebook
+  (screenshots), an article (its link opens the page at the passage you kept), a video or podcast (a link,
+  mostly your notes on it), a class (its teacher and school; notes for each session, and quotes), a talk,
+  or anything else.
+- **People**: who made a source (author, translator, editor, speaker, teacher) and whom it is about. Each
+  person has a page: your notes on them, their works, what they said, their words quoted elsewhere, and what
+  is about them, each work with its quotes and your notes on it. A passage by Lordon about Spinoza is stored
+  once and shows on both pages.
+- **Topics**: each with a page: your notes, the people who appear in it, topics often found with it, its
+  quotes grouped by person, source or date.
 
-An entry takes its source's people and topics; untick one when a passage is not about it. Its words are its
+Every section and group of a page folds away with its − button (+ shows it again); each device remembers
+what you folded.
+
+A quote takes its source's people and topics; untick one when a passage is not about it. Its words are its
 source author's unless you name someone else (a quote within a quote).
 
 ## What is here
@@ -31,7 +39,7 @@ source author's unless you name someone else (a quote within a quote).
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
-  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.5.1`)
+  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.6.0`)
 
 ## Install
 
@@ -49,25 +57,34 @@ source author's unless you name someone else (a quote within a quote).
 Stop the project and deploy it again: the compose file sets `pull_policy: always`, so the newest image is
 downloaded. The data folder is kept.
 
-When an update changes the shape of the database (0.5.0 does: books become sources, authors become people,
-tags become topics), the app first writes a copy of the database as it was to
-`data/backups/before-0.5.0-<date>.zip`. Nothing is lost in the change: ids, quotes, comments, notes, pages,
-photos and covers all stay.
+When an update changes the shape of the database, the app first writes a copy of the database as it was to
+`data/backups/before-<version>-<date>.zip`. Nothing is lost in the change: ids, quotes, notes, pages, photos
+and covers all stay.
+
+- 0.5.0: books become sources, authors become people, tags become topics.
+- 0.6.0: comments become notes on their source, about the same people and topics (with their page, and
+  your note on the comment added below its text); a note that referred to a comment now refers to its
+  source. Quotes can have no source, notes can be on sources, and classes are a new kind of source.
 
 Do not use a one-click "update" or "recreate" button on the `marginote` container (UGOS, Portainer…): it
 shares the Tailscale container's network, and those buttons cannot rebuild such a container (Docker
 answers "conflicting options: hostname and the network mode"), which leaves it deleted.
 
-### Going back to version 0.4.0
+### Going back to an earlier version
+
+| Back to | Copy to restore | Image |
+| --- | --- | --- |
+| 0.5.1 | `before-0.6.0-<date>.zip` | `marginote:0.5.1` |
+| 0.4.0 | `before-0.5.0-<date>.zip` | `marginote:0.4.0` |
 
 1. Stop the project.
 2. In `data/`, move `marginote.db` aside (and `marginote.db-wal`, `marginote.db-shm` if present).
-3. Unzip `data/backups/before-0.5.0-<date>.zip` and put its `marginote.db` in `data/`.
-4. In the compose file, replace `marginote:latest` with `marginote:0.4.0`, and deploy.
+3. Unzip the copy and put its `marginote.db` in `data/`.
+4. In the compose file, replace `marginote:latest` with the image above, and deploy.
 
-Photos and covers stay where they are, and 0.4.0 finds them (a cover replaced with 0.5.0 shows blank until
-you look it up again). Quotes captured with 0.5.0 are not in the old database. The code of 0.4.0 is on the
-`release-0.4` branch.
+Photos and covers stay where they are, and the older version finds them (with 0.4.0, a cover replaced
+since shows blank until you look it up again). What you captured since the upgrade is not in the old
+database. The code of each version is on its branch: `release-0.4`, `release-0.5`.
 
 ## Sending from other apps
 
@@ -114,7 +131,7 @@ Everything lives in the data folder:
 
 ```
 data/
-  marginote.db                  sources, people, topics, quotes, comments, notes (one file)
+  marginote.db                  sources, people, topics, quotes, notes (one file)
   photos/inbox/                 pages sent to be sorted later
   photos/<Title> (<id>)/        a source's page photos, named after their page: p168 - 1a2b3c4d.webp
   covers/<id>.webp              covers and video pictures

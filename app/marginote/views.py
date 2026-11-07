@@ -59,9 +59,11 @@ SOURCE_FIELDS = ("kind", "title", "subtitle", "publisher", "edition", "year", "d
 
 SOURCE_LIST_SQL = """
 SELECT s.*,
-       (SELECT COUNT(*) FROM entries e WHERE e.source_id = s.id)                        AS entry_count,
-       (SELECT COUNT(*) FROM entries e WHERE e.source_id = s.id AND e.kind = 'quote')   AS quote_count,
-       (SELECT MAX(e.created_at) FROM entries e WHERE e.source_id = s.id)               AS last_entry_at
+       (SELECT COUNT(*) FROM entries e WHERE e.source_id = s.id)                       AS quote_count,
+       (SELECT COUNT(*) FROM note_sources ns WHERE ns.source_id = s.id)                AS note_count,
+       NULLIF(MAX(COALESCE((SELECT MAX(e.created_at) FROM entries e WHERE e.source_id = s.id), ''),
+                  COALESCE((SELECT MAX(n.updated_at) FROM notes n JOIN note_sources ns ON ns.note_id = n.id
+                            WHERE ns.source_id = s.id), '')), '')                      AS last_entry_at
 FROM sources s
 """
 
@@ -96,9 +98,8 @@ def source_dicts(conn, rows) -> list[dict]:
             "topics": topics.get(r["id"], []),
             "has_cover": bool(r["cover"]),
             "cover_url": f"/api/sources/{r['id']}/cover?v={quote(r['updated_at'])}" if r["cover"] else None,
-            "entry_count": r["entry_count"],
             "quote_count": r["quote_count"],
-            "comment_count": r["entry_count"] - r["quote_count"],
+            "note_count": r["note_count"],
             "last_entry_at": r["last_entry_at"],
             "created_at": r["created_at"],
             "updated_at": r["updated_at"],
@@ -121,7 +122,7 @@ def source_brief(row) -> dict:
 
 ENTRY_SQL = f"""
 SELECT e.*, s.title AS source_title, s.kind AS source_kind, s.url AS source_url, {db.BY_SQL} AS by_id
-FROM entries e JOIN sources s ON s.id = e.source_id
+FROM entries e LEFT JOIN sources s ON s.id = e.source_id
 """
 
 
@@ -175,19 +176,18 @@ def entry_dicts(conn, rows) -> list[dict]:
         by = people.get(r["by_id"])
         out.append({
             "id": r["id"],
-            "kind": r["kind"],
             "text": r["text"],
-            "note": r["note"],
-            "page": r["page"],
-            "source": {"id": r["source_id"], "kind": r["source_kind"], "title": r["source_title"]},
+            "note": r["note"],                                           # your comment on it
+            "page": r["page"],                                           # with no source: where and when it was said
+            "source": {"id": r["source_id"], "kind": r["source_kind"], "title": r["source_title"]}
+            if r["source_id"] else None,
             "by": by,                                                    # whose words
             "words_by": people.get(r["words_by"]),                       # set only for a quote within a quote
             "about": [{**p, "from_source": p["id"] in inherited_about.get(r["id"], set())}
                       for p in about.get(r["id"], [])],
             "topics": [{**t, "from_source": t["id"] in inherited_topics.get(r["id"], set())}
                        for t in topics.get(r["id"], [])],
-            "link": passage_link(r["source_url"], r["source_kind"], r["text"]) if r["kind"] == "quote"
-            else r["source_url"],
+            "link": passage_link(r["source_url"], r["source_kind"], r["text"]) if r["source_id"] else None,
             "photo_id": r["photo_id"],
             "photo_url": f"/api/photos/{r['photo_id']}/image" if r["photo_id"] else None,
             "word_start": r["word_start"],
@@ -201,7 +201,7 @@ def entry_dicts(conn, rows) -> list[dict]:
 def entry_dict(conn, entry_id: int) -> dict:
     row = conn.execute(ENTRY_SQL + " WHERE e.id = ?", (entry_id,)).fetchone()
     if row is None:
-        raise HTTPException(404, "No quote or comment with this id")
+        raise HTTPException(404, "No quote with this id")
     return entry_dicts(conn, [row])[0]
 
 
@@ -218,9 +218,15 @@ def note_dicts(conn, rows, with_entries: bool = False) -> list[dict]:
     ids = [r["id"] for r in rows]
     people: dict[int, list] = {}
     topics: dict[int, list] = {}
+    sources: dict[int, list] = {}
     entries: dict[int, list] = {}
     for part in db.chunks(ids):
         marks = ",".join("?" * len(part))
+        for r in conn.execute(
+            f"SELECT ns.note_id, s.id, s.kind, s.title FROM note_sources ns JOIN sources s ON s.id = ns.source_id "
+            f"WHERE ns.note_id IN ({marks}) ORDER BY ns.position", part
+        ):
+            sources.setdefault(r["note_id"], []).append(source_brief(r))
         for r in conn.execute(
             f"SELECT np.note_id, p.id, p.name, p.sort_name FROM note_people np JOIN people p ON p.id = np.person_id "
             f"WHERE np.note_id IN ({marks}) ORDER BY p.sort_name COLLATE NOCASE", part
@@ -240,8 +246,8 @@ def note_dicts(conn, rows, with_entries: bool = False) -> list[dict]:
                 if link["entry_id"] in found:
                     entries.setdefault(link["note_id"], []).append(found[link["entry_id"]])
     return [{
-        "id": r["id"], "title": r["title"], "text": r["text"],
-        "people": people.get(r["id"], []), "topics": topics.get(r["id"], []),
+        "id": r["id"], "title": r["title"], "text": r["text"], "place": r["place"],
+        "sources": sources.get(r["id"], []), "people": people.get(r["id"], []), "topics": topics.get(r["id"], []),
         **({"entries": entries.get(r["id"], [])} if with_entries else {}),
         "created_at": r["created_at"], "updated_at": r["updated_at"],
     } for r in rows]

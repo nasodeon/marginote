@@ -257,10 +257,81 @@ CREATE VIRTUAL TABLE notes_fts USING fts5 (
 );
 """
 
-LATEST = 5
+# 0.6: a quote can come from a person with no source; comments become notes, which can be on sources; classes.
+# The old sources and entries tables are rebuilt (their CHECK constraints change); ids stay the same.
+SCHEMA_V6 = """
+CREATE TABLE sources_v6 (
+    id          INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL DEFAULT 'book'
+                CHECK (kind IN ('book', 'ebook', 'article', 'video', 'podcast', 'class', 'talk', 'other')),
+    title       TEXT NOT NULL,
+    subtitle    TEXT,
+    publisher   TEXT,              -- the publisher; for a web page the site, for a video the channel, for a class the school
+    edition     TEXT,
+    year        INTEGER,
+    date        TEXT,              -- '2026-10-02' when known (articles, videos, talks)
+    isbn        TEXT,
+    url         TEXT,
+    language    TEXT,
+    field       TEXT,              -- what kind of work: 'Philosophie', 'Roman'
+    cover       TEXT,              -- file name in covers/
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE entries_v6 (
+    id          INTEGER PRIMARY KEY,
+    source_id   INTEGER REFERENCES sources (id) ON DELETE CASCADE,   -- none: words someone said, from no source
+    text        TEXT NOT NULL,
+    note        TEXT,                      -- your comment on the quote
+    page        TEXT,                      -- where in the source: '57', 'III, 9 sc.'; with no source, where and when
+    page_sort   INTEGER,
+    words_by    INTEGER REFERENCES people (id) ON DELETE SET NULL,   -- whose words, when not the source's author's
+    photo_id    TEXT REFERENCES photos (id) ON DELETE SET NULL,
+    word_start  INTEGER,
+    word_end    INTEGER,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    CHECK (source_id IS NOT NULL OR words_by IS NOT NULL)
+);
+
+CREATE TABLE note_sources (
+    note_id    INTEGER NOT NULL REFERENCES notes (id) ON DELETE CASCADE,
+    source_id  INTEGER NOT NULL REFERENCES sources (id) ON DELETE CASCADE,
+    position   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (note_id, source_id)
+);
+"""
+
+SCHEMA_V6_AFTER = """
+CREATE INDEX sources_isbn ON sources (isbn);
+CREATE INDEX sources_url ON sources (url);
+CREATE INDEX entries_source ON entries (source_id);
+CREATE INDEX entries_photo ON entries (photo_id);
+CREATE INDEX entries_words_by ON entries (words_by);
+CREATE INDEX entries_created ON entries (created_at);
+CREATE INDEX note_sources_source ON note_sources (source_id);
+
+-- whom and what each quote is about, once its source's links and its own exceptions are combined
+CREATE VIEW entry_about (entry_id, person_id) AS
+    SELECT e.id, sp.person_id FROM entries e
+    JOIN source_people sp ON sp.source_id = e.source_id AND sp.role = 'about'
+    WHERE NOT EXISTS (SELECT 1 FROM entry_people x WHERE x.entry_id = e.id AND x.person_id = sp.person_id AND x.included = 0)
+    UNION
+    SELECT entry_id, person_id FROM entry_people WHERE included = 1;
+
+CREATE VIEW entry_topic (entry_id, topic_id) AS
+    SELECT e.id, st.topic_id FROM entries e
+    JOIN source_topics st ON st.source_id = e.source_id
+    WHERE NOT EXISTS (SELECT 1 FROM entry_topics x WHERE x.entry_id = e.id AND x.topic_id = st.topic_id AND x.included = 0)
+    UNION
+    SELECT entry_id, topic_id FROM entry_topics WHERE included = 1;
+"""
+
+LATEST = 6
 MAKER_ROLES = ("author", "editor", "speaker")      # roles that make a person's "works"
 ROLES = ("author", "translator", "editor", "speaker", "about")
-KINDS = ("book", "ebook", "article", "video", "podcast", "talk", "other")
+KINDS = ("book", "ebook", "article", "video", "podcast", "class", "talk", "other")
 
 
 def now() -> str:
@@ -305,6 +376,8 @@ def migrate(db_path: Path, before_upgrade: Callable[[int], None] | None = None) 
         conn.commit()
         if old < 5:
             _to_v5(conn)
+        if old < 6:
+            _to_v6(conn)
         if old > 0:
             conn.execute("VACUUM")   # give back the space the old tables took
     finally:
@@ -364,6 +437,71 @@ def _to_v5(conn: sqlite3.Connection) -> None:
         if problems:
             raise RuntimeError(f"Database upgrade stopped: {len(problems)} broken links")
         conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _to_v6(conn: sqlite3.Connection) -> None:
+    """Comments become notes on their source, about the same people and topics; a note that pointed to a
+    comment now points to its source. Quotes keep their ids; nothing else changes."""
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        # what each comment is about, read while the views still exist
+        comments = conn.execute(
+            "SELECT * FROM entries WHERE kind = 'comment' AND photo_id IS NULL ORDER BY id").fetchall()
+        links = {}
+        for c in comments:
+            people = [r[0] for r in conn.execute("SELECT person_id FROM entry_about WHERE entry_id = ?", (c["id"],))]
+            if c["words_by"]:
+                people.append(c["words_by"])
+            topics = [r[0] for r in conn.execute("SELECT topic_id FROM entry_topic WHERE entry_id = ?", (c["id"],))]
+            refs = [r[0] for r in conn.execute("SELECT note_id FROM note_entries WHERE entry_id = ?", (c["id"],))]
+            links[c["id"]] = (list(dict.fromkeys(people)), list(dict.fromkeys(topics)), refs)
+        conn.execute("DROP VIEW entry_about")
+        conn.execute("DROP VIEW entry_topic")
+        for statement in _statements(SCHEMA_V6):
+            conn.execute(statement)
+        conn.execute("ALTER TABLE notes ADD COLUMN place TEXT")    # where in its source: page, chapter, session
+        conn.execute("INSERT INTO sources_v6 SELECT id, kind, title, subtitle, publisher, edition, year, date, isbn, "
+                     "url, language, field, cover, created_at, updated_at FROM sources")
+        conn.execute("DROP TABLE sources")
+        conn.execute("ALTER TABLE sources_v6 RENAME TO sources")
+        comment_ids = [c["id"] for c in comments]
+        conn.execute("INSERT INTO entries_v6 SELECT id, source_id, text, note, page, page_sort, words_by, photo_id, "
+                     "word_start, word_end, created_at, updated_at FROM entries WHERE id NOT IN "
+                     f"({','.join(str(int(i)) for i in comment_ids) or '-1'})")
+        for c in comments:
+            people, topics, refs = links[c["id"]]
+            text = c["text"] + (f"\n\n{c['note']}" if c["note"] else "")
+            note_id = conn.execute(
+                "INSERT INTO notes (title, text, place, created_at, updated_at) VALUES (NULL, ?, ?, ?, ?)",
+                (text, c["page"], c["created_at"], c["updated_at"])).lastrowid
+            conn.execute("INSERT INTO note_sources (note_id, source_id, position) VALUES (?, ?, 0)", (note_id, c["source_id"]))
+            for pid in people:
+                conn.execute("INSERT OR IGNORE INTO note_people (note_id, person_id) VALUES (?, ?)", (note_id, pid))
+            for tid in topics:
+                conn.execute("INSERT OR IGNORE INTO note_topics (note_id, topic_id) VALUES (?, ?)", (note_id, tid))
+            for ref in refs:
+                conn.execute("INSERT OR IGNORE INTO note_sources (note_id, source_id, position) VALUES (?, ?, "
+                             "(SELECT COUNT(*) FROM note_sources WHERE note_id = ?))", (ref, c["source_id"], ref))
+            for table in ("entry_people", "entry_topics", "note_entries"):
+                conn.execute(f"DELETE FROM {table} WHERE entry_id = ?", (c["id"],))
+            conn.execute("DELETE FROM entries_fts WHERE rowid = ?", (c["id"],))
+        conn.execute("DROP TABLE entries")
+        conn.execute("ALTER TABLE entries_v6 RENAME TO entries")
+        for statement in _statements(SCHEMA_V6_AFTER):
+            conn.execute(statement)
+        for (note_id,) in conn.execute("SELECT id FROM notes").fetchall():
+            reindex_note(conn, note_id)
+        problems = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if problems:
+            raise RuntimeError(f"Database upgrade stopped: {len(problems)} broken links")
+        conn.execute("PRAGMA user_version = 6")
         conn.commit()
     except Exception:
         conn.rollback()
@@ -563,8 +701,8 @@ BY_SQL = (
 def reindex_entry(conn: sqlite3.Connection, entry_id: int) -> None:
     conn.execute("DELETE FROM entries_fts WHERE rowid = ?", (entry_id,))
     row = conn.execute(
-        "SELECT e.id, e.text, e.note, e.words_by, s.id AS source_id, s.title, s.subtitle, s.publisher "
-        "FROM entries e JOIN sources s ON s.id = e.source_id WHERE e.id = ?", (entry_id,)
+        "SELECT e.id, e.text, e.note, e.page, e.words_by, e.source_id, s.title, s.subtitle, s.publisher "
+        "FROM entries e LEFT JOIN sources s ON s.id = e.source_id WHERE e.id = ?", (entry_id,)
     ).fetchone()
     if row is None:
         return
@@ -577,13 +715,16 @@ def reindex_entry(conn: sqlite3.Connection, entry_id: int) -> None:
     conn.execute(
         "INSERT INTO entries_fts (rowid, text, note, source, people, topics) VALUES (?, ?, ?, ?, ?, ?)",
         (row["id"], row["text"], row["note"] or "",
-         " ".join(filter(None, (row["title"], row["subtitle"], row["publisher"]))), " ".join(people), " ".join(topics)),
+         " ".join(filter(None, (row["title"], row["subtitle"], row["publisher"]) if row["source_id"] else (row["page"],))),
+         " ".join(people), " ".join(topics)),
     )
 
 
 def reindex_source(conn: sqlite3.Connection, source_id: int) -> None:
     for (entry_id,) in conn.execute("SELECT id FROM entries WHERE source_id = ?", (source_id,)).fetchall():
         reindex_entry(conn, entry_id)
+    for (note_id,) in conn.execute("SELECT note_id FROM note_sources WHERE source_id = ?", (source_id,)).fetchall():
+        reindex_note(conn, note_id)
 
 
 def reindex_person(conn: sqlite3.Connection, pid: int) -> None:
@@ -599,15 +740,17 @@ def reindex_person(conn: sqlite3.Connection, pid: int) -> None:
 
 def reindex_note(conn: sqlite3.Connection, note_id: int) -> None:
     conn.execute("DELETE FROM notes_fts WHERE rowid = ?", (note_id,))
-    row = conn.execute("SELECT id, title, text FROM notes WHERE id = ?", (note_id,)).fetchone()
+    row = conn.execute("SELECT id, title, text, place FROM notes WHERE id = ?", (note_id,)).fetchone()
     if row is None:
         return
     links = [r[0] for r in conn.execute(
         "SELECT p.name FROM note_people np JOIN people p ON p.id = np.person_id WHERE np.note_id = ? "
-        "UNION ALL SELECT t.name FROM note_topics nt JOIN topics t ON t.id = nt.topic_id WHERE nt.note_id = ?",
-        (note_id, note_id))]
+        "UNION ALL SELECT t.name FROM note_topics nt JOIN topics t ON t.id = nt.topic_id WHERE nt.note_id = ? "
+        "UNION ALL SELECT s.title || ' ' || COALESCE(s.subtitle, '') FROM note_sources ns "
+        "JOIN sources s ON s.id = ns.source_id WHERE ns.note_id = ?",
+        (note_id, note_id, note_id))]
     conn.execute("INSERT INTO notes_fts (rowid, title, text, links) VALUES (?, ?, ?, ?)",
-                 (note_id, row["title"] or "", row["text"], " ".join(links)))
+                 (note_id, row["title"] or "", row["text"], " ".join(filter(None, [*links, row["place"]]))))
 
 
 def fts_query(user_text: str) -> str | None:

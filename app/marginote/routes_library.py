@@ -17,7 +17,7 @@ from .views import (SOURCE_LIST_SQL, entries_where, load_note, load_person, load
 
 log = logging.getLogger("marginote")
 MAX_UPLOAD = 30 * 1024 * 1024
-Kind = Literal["book", "ebook", "article", "video", "podcast", "talk", "other"]
+Kind = Literal["book", "ebook", "article", "video", "podcast", "class", "talk", "other"]
 Role = Literal["author", "translator", "editor", "speaker", "about"]
 PersonRef = int | str
 COVER_CACHE = {"Cache-Control": "private, max-age=31536000, immutable"}   # its address changes with the source
@@ -76,14 +76,18 @@ class TopicPatch(BaseModel):
 class NoteIn(BaseModel):
     title: str | None = None
     text: str = Field(min_length=1)
+    sources: list[int] = Field([], description="The books, videos, classes… it is on")
+    place: str | None = Field(None, description="Where in its source: a page, a chapter, a session")
     people: list[PersonRef] = []
     topics: list[str] = []
-    entries: list[int] = Field([], description="Quotes or comments the note refers to")
+    entries: list[int] = Field([], description="Quotes the note refers to")
 
 
 class NotePatch(BaseModel):
     title: str | None = None
     text: str | None = None
+    sources: list[int] | None = None
+    place: str | None = None
     people: list[PersonRef] | None = None
     topics: list[str] | None = None
     entries: list[int] | None = None
@@ -242,10 +246,14 @@ def router(ctx: Context) -> APIRouter:
 
     @api.delete("/api/sources/{source_id}", tags=["sources"])
     def delete_source(source_id: int, conn: sqlite3.Connection = Depends(get_db)):
-        """Deletes the source with all its quotes and comments. Their photos go with the hourly cleanup."""
+        """Deletes the source with all its quotes (their photos go with the hourly cleanup). Your notes on it
+        are kept."""
         row = load_source(conn, source_id)
         conn.execute("DELETE FROM entries_fts WHERE rowid IN (SELECT id FROM entries WHERE source_id = ?)", (source_id,))
+        notes = [r[0] for r in conn.execute("SELECT note_id FROM note_sources WHERE source_id = ?", (source_id,))]
         conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        for note_id in notes:
+            db.reindex_note(conn, note_id)
         db.forget_unused_people(conn)
         db.forget_unused_topics(conn)
         conn.commit()
@@ -302,9 +310,12 @@ def router(ctx: Context) -> APIRouter:
 
     @api.get("/api/sources/{source_id}/export.md", tags=["sources"])
     def export_source(source_id: int, conn: sqlite3.Connection = Depends(get_db)):
-        """Every quote and comment of one source, as a Markdown file."""
+        """Every quote of one source, and your notes on it, as a Markdown file."""
         source = source_dict(conn, source_id)
         entries = entries_where(conn, "e.source_id = ?", (source_id,), order=PAGE_ORDER)
+        notes = note_dicts(conn, conn.execute(
+            "SELECT n.* FROM notes n JOIN note_sources ns ON ns.note_id = n.id WHERE ns.source_id = ? "
+            "ORDER BY n.created_at", (source_id,)).fetchall())
         authors = ", ".join(p["name"] for p in source["people"]["author"] + source["people"]["speaker"])
         details = ", ".join(str(v) for v in (source["publisher"], source["year"] or source["date"], source["edition"]) if v)
         lines = [f"# {source['title']}", ""]
@@ -316,18 +327,23 @@ def router(ctx: Context) -> APIRouter:
             where = f"p. {e['page']}" if e["page"] and e["page"][0].isdigit() else (e["page"] or "")
             tags = " ".join(f"#{t['name'].replace(' ', '-')}" for t in e["topics"])
             quoted = f"{e['words_by']['name']}, quoted" if e["words_by"] else ""
-            if e["kind"] == "quote":
-                lines += [f"> {line}" for line in e["text"].splitlines()]
-                meta = " · ".join(x for x in (quoted, where, tags) if x)
-                if meta:
-                    lines += [">", f"> — {meta}"]
-            else:
-                lines.append(f"**Comment{' (' + where + ')' if where else ''}:** {e['text']}")
-                if tags:
-                    lines.append(tags)
+            lines += [f"> {line}" for line in e["text"].splitlines()]
+            meta = " · ".join(x for x in (quoted, where, tags) if x)
+            if meta:
+                lines += [">", f"> — {meta}"]
             if e["note"]:
-                lines += ["", f"Note: {e['note']}"]
+                lines += ["", f"Comment: {e['note']}"]
             lines.append("")
+        if notes:
+            lines += ["## Notes", ""]
+            for n in notes:
+                head = " · ".join(x for x in (n["title"], n["place"]) if x)
+                if head:
+                    lines += [f"**{head}**", ""]
+                lines += [n["text"], ""]
+                tags = " ".join(f"#{t['name'].replace(' ', '-')}" for t in n["topics"])
+                if tags:
+                    lines += [tags, ""]
         return PlainTextResponse("\n".join(lines), media_type="text/markdown; charset=utf-8",
                                  headers={"Content-Disposition": f'attachment; filename="{slug(source["title"])}.md"'})
 
@@ -350,8 +366,10 @@ def router(ctx: Context) -> APIRouter:
       (SELECT COUNT(DISTINCT source_id) FROM source_people WHERE person_id = p.id AND role = 'translator') AS translated,
       (SELECT COUNT(DISTINCT e.source_id) FROM entries e WHERE e.words_by = p.id AND e.source_id NOT IN
           (SELECT source_id FROM source_people WHERE person_id = p.id AND role != 'about')) AS quoted_in,
+      (SELECT COUNT(*) FROM entries e WHERE e.words_by = p.id AND e.source_id IS NULL) AS said,
       (SELECT COUNT(*) FROM (SELECT source_id FROM source_people WHERE person_id = p.id AND role = 'about'
-          UNION SELECT e.source_id FROM entry_about ea JOIN entries e ON e.id = ea.entry_id WHERE ea.person_id = p.id)) AS about_in,
+          UNION SELECT e.source_id FROM entry_about ea JOIN entries e ON e.id = ea.entry_id WHERE ea.person_id = p.id
+          AND e.source_id IS NOT NULL)) AS about_in,
       (SELECT COUNT(*) FROM (SELECT e.id FROM entries e JOIN source_people sp ON sp.source_id = e.source_id
           AND sp.person_id = p.id AND sp.role != 'about' UNION SELECT id FROM entries WHERE words_by = p.id
           UNION SELECT entry_id FROM entry_about WHERE person_id = p.id)) AS entries,
@@ -362,7 +380,7 @@ def router(ctx: Context) -> APIRouter:
     def person_dict(row) -> dict:
         return {**person_brief(row), "dates": row["dates"],
                 "aliases": row["aliases"].splitlines() if row["aliases"] else [],
-                **{k: row[k] for k in ("works", "translated", "quoted_in", "about_in", "entries", "notes")}}
+                **{k: row[k] for k in ("works", "translated", "quoted_in", "said", "about_in", "entries", "notes")}}
 
     @api.get("/api/people", tags=["people"])
     def list_people(conn: sqlite3.Connection = Depends(get_db)):
@@ -372,8 +390,9 @@ def router(ctx: Context) -> APIRouter:
 
     @api.get("/api/people/{person_id}", tags=["people"])
     def get_person(person_id: int, conn: sqlite3.Connection = Depends(get_db)):
-        """A person's page: your notes on them, their works, their words quoted elsewhere, what is about them.
-        An entry appears once, in the first section that fits."""
+        """A person's page: your notes on them, their works, what they said (no source), their words quoted
+        elsewhere, what is about them. Each section groups by source, with its quotes and your notes on it.
+        A quote or a note appears once, in the first place that fits."""
         load_person(conn, person_id)
         person = person_dict(conn.execute(PEOPLE_SQL + " WHERE p.id = ?", (person_id,)).fetchone())
         made = {r[0]: r[1] for r in conn.execute(
@@ -390,44 +409,62 @@ def router(ctx: Context) -> APIRouter:
             return fresh
 
         def in_list(ids):
-            return ",".join(str(int(i)) for i in ids) or "-1"   # never an id
+            return ",".join(str(int(i)) for i in ids if i is not None) or "-1"   # never an id
+
+        def sid(e):
+            return e["source"]["id"] if e["source"] else None
 
         for key, ids in (("works", works), ("translated", translated)):
             if ids:
                 entries = take(entries_where(conn, f"e.source_id IN ({in_list(ids)})", order=PAGE_ORDER))
                 sections.append({"key": key, "source_ids": ids, "entries": entries})
+        said = take(entries_where(conn, "e.words_by = ? AND e.source_id IS NULL", (person_id,)))
+        if said:
+            sections.append({"key": "said", "source_ids": [None], "entries": said})
         quoted = take(entries_where(conn, f"e.words_by = ? AND e.source_id NOT IN ({in_list(made)})", (person_id,),
                                     order=PAGE_ORDER))
         if quoted:
-            sections.append({"key": "quoted", "source_ids": list(dict.fromkeys(e["source"]["id"] for e in quoted)),
-                             "entries": quoted})
+            sections.append({"key": "quoted", "source_ids": list(dict.fromkeys(sid(e) for e in quoted)), "entries": quoted})
         about = take(entries_where(conn, "e.id IN (SELECT entry_id FROM entry_about WHERE person_id = ?)",
                                    (person_id,), order=PAGE_ORDER))
         about_sources = list(dict.fromkeys(
-            [e["source"]["id"] for e in about]
+            [sid(e) for e in about]
             + [r[0] for r in conn.execute("SELECT source_id FROM source_people WHERE person_id = ? AND role = 'about'",
                                           (person_id,)) if r[0] not in made]))
         if about_sources:
             sections.append({"key": "about", "source_ids": about_sources, "entries": about})
-        all_sources = {s for sec in sections for s in sec["source_ids"]}
+        all_sources = {s for sec in sections for s in sec["source_ids"] if s is not None}
         rows = conn.execute(f"{SOURCE_LIST_SQL} WHERE s.id IN ({in_list(all_sources)})").fetchall()
         sources = {s["id"]: s for s in source_dicts(conn, rows)}
+        notes_of: dict[int, list] = {}
+        for n in note_dicts(conn, conn.execute(
+                f"SELECT DISTINCT n.* FROM notes n JOIN note_sources ns ON ns.note_id = n.id "
+                f"WHERE ns.source_id IN ({in_list(all_sources)}) ORDER BY n.created_at").fetchall()):
+            for src in n["sources"]:
+                notes_of.setdefault(src["id"], []).append(n)
+        shown_notes: set[int] = set()
         for sec in sections:
             groups = []
-            for sid in sec.pop("source_ids"):
-                if sid in sources:
-                    groups.append({"source": sources[sid], "entries": [e for e in sec["entries"] if e["source"]["id"] == sid]})
-            # works by date of the work, the rest by most recent entry
+            for source_id in sec.pop("source_ids"):
+                if source_id is None:
+                    groups.append({"source": None, "entries": [e for e in sec["entries"] if e["source"] is None],
+                                   "notes": []})
+                elif source_id in sources:
+                    notes = [n for n in notes_of.get(source_id, []) if n["id"] not in shown_notes]
+                    shown_notes.update(n["id"] for n in notes)
+                    groups.append({"source": sources[source_id], "notes": notes,
+                                   "entries": [e for e in sec["entries"] if sid(e) == source_id]})
+            # works by date of the work, the rest by the most recent quote or note
             if sec["key"] in ("works", "translated"):
                 groups.sort(key=lambda g: (g["source"]["year"] or 9999, g["source"]["title"].lower()))
             else:
-                groups.sort(key=lambda g: max([e["created_at"] for e in g["entries"]] or [g["source"]["created_at"]]),
-                            reverse=True)
+                groups.sort(key=lambda g: max([e["created_at"] for e in g["entries"]] + [n["created_at"] for n in g["notes"]]
+                                              or [g["source"]["created_at"] if g["source"] else ""]), reverse=True)
             sec["groups"] = groups
             del sec["entries"]
-        notes = note_dicts(conn, conn.execute(
+        notes = [n for n in note_dicts(conn, conn.execute(
             "SELECT n.* FROM notes n JOIN note_people np ON np.note_id = n.id WHERE np.person_id = ? "
-            "ORDER BY n.updated_at DESC", (person_id,)).fetchall())
+            "ORDER BY n.updated_at DESC", (person_id,)).fetchall()) if n["id"] not in shown_notes]
         return {"person": person, "notes": notes, "sections": sections}
 
     @api.patch("/api/people/{person_id}", tags=["people"])
@@ -480,8 +517,14 @@ def router(ctx: Context) -> APIRouter:
 
     @api.delete("/api/people/{person_id}", tags=["people"])
     def delete_person(person_id: int, conn: sqlite3.Connection = Depends(get_db)):
-        """Removes the person from every source, quote and note (these are kept)."""
+        """Removes the person from every source, quote and note (these are kept). Not possible while quotes
+        with no source are theirs: delete those first, or merge the person into another."""
         load_person(conn, person_id)
+        said = conn.execute("SELECT COUNT(*) FROM entries WHERE words_by = ? AND source_id IS NULL",
+                            (person_id,)).fetchone()[0]
+        if said:
+            raise HTTPException(409, f"{said} quote{'s' if said > 1 else ''} with no source are theirs: delete "
+                                     f"{'them' if said > 1 else 'it'} first, or merge this person into another")
         affected = [r[0] for r in conn.execute(
             "SELECT id FROM entries WHERE words_by = ? OR source_id IN (SELECT source_id FROM source_people WHERE person_id = ?) "
             "UNION SELECT entry_id FROM entry_people WHERE person_id = ?", (person_id,) * 3)]
@@ -497,7 +540,7 @@ def router(ctx: Context) -> APIRouter:
     SELECT t.id, t.name,
       (SELECT COUNT(*) FROM entry_topic et WHERE et.topic_id = t.id) AS entries,
       (SELECT COUNT(DISTINCT e.source_id) FROM entry_topic et JOIN entries e ON e.id = et.entry_id
-          WHERE et.topic_id = t.id) AS sources,
+          WHERE et.topic_id = t.id AND e.source_id IS NOT NULL) AS sources,
       (SELECT COUNT(*) FROM note_topics nt WHERE nt.topic_id = t.id) AS notes
     FROM topics t
     """
@@ -574,7 +617,13 @@ def router(ctx: Context) -> APIRouter:
 
     # ----- notes -----
 
-    def set_note_links(conn, note_id: int, people, topics, entries) -> None:
+    def set_note_links(conn, note_id: int, people, topics, entries, sources=None) -> None:
+        if sources is not None:
+            conn.execute("DELETE FROM note_sources WHERE note_id = ?", (note_id,))
+            for position, source_id in enumerate(dict.fromkeys(sources)):
+                load_source(conn, source_id)
+                conn.execute("INSERT INTO note_sources (note_id, source_id, position) VALUES (?, ?, ?)",
+                             (note_id, source_id, position))
         if people is not None:
             conn.execute("DELETE FROM note_people WHERE note_id = ?", (note_id,))
             for pid in dict.fromkeys(person_or_422(conn, r) for r in people if not (isinstance(r, str) and not r.strip())):
@@ -587,15 +636,20 @@ def router(ctx: Context) -> APIRouter:
             conn.execute("DELETE FROM note_entries WHERE note_id = ?", (note_id,))
             for position, entry_id in enumerate(dict.fromkeys(entries)):
                 if not conn.execute("SELECT 1 FROM entries WHERE id = ?", (entry_id,)).fetchone():
-                    raise HTTPException(422, f"No quote or comment with id {entry_id}")
+                    raise HTTPException(422, f"No quote with id {entry_id}")
                 conn.execute("INSERT INTO note_entries (note_id, entry_id, position) VALUES (?, ?, ?)",
                              (note_id, entry_id, position))
 
     @api.get("/api/notes", tags=["notes"])
-    def list_notes(person_id: int | None = None, topic_id: int | None = None, q: str | None = None,
+    def list_notes(person_id: int | None = None, topic_id: int | None = None, source_id: int | None = None,
+                   q: str | None = None, order: Literal["changed", "created", "place"] = "changed",
                    conn: sqlite3.Connection = Depends(get_db)):
-        """Your notes, the most recently changed first; filtered by person, topic, or words."""
+        """Your notes, the most recently changed first; filtered by person, topic, source, or words.
+        order=place: in the order of their place in the source (pages, sessions), then oldest first."""
         where, args = [], []
+        if source_id is not None:
+            where.append("n.id IN (SELECT note_id FROM note_sources WHERE source_id = ?)")
+            args.append(source_id)
         if person_id is not None:
             where.append("n.id IN (SELECT note_id FROM note_people WHERE person_id = ?)")
             args.append(person_id)
@@ -605,15 +659,20 @@ def router(ctx: Context) -> APIRouter:
         if q and db.fts_query(q):
             where.append("n.id IN (SELECT rowid FROM notes_fts WHERE notes_fts MATCH ?)")
             args.append(db.fts_query(q))
-        sql = "SELECT n.* FROM notes n" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY n.updated_at DESC"
-        return note_dicts(conn, conn.execute(sql, args).fetchall())
+        order_sql = {"changed": "n.updated_at DESC", "created": "n.created_at DESC",
+                     "place": "n.place IS NULL, n.place, n.created_at"}[order]
+        sql = "SELECT n.* FROM notes n" + (" WHERE " + " AND ".join(where) if where else "") + f" ORDER BY {order_sql}"
+        rows = conn.execute(sql, args).fetchall()
+        if order == "place":
+            rows = sorted(rows, key=lambda r: (r["place"] is None, db.page_sort_key(r["place"]) or 0, r["created_at"]))
+        return note_dicts(conn, rows)
 
     @api.post("/api/notes", tags=["notes"], status_code=201)
     def create_note(body: NoteIn, conn: sqlite3.Connection = Depends(get_db)):
         stamp = db.now()
-        note_id = conn.execute("INSERT INTO notes (title, text, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                               (blank_to_none(body.title), body.text.strip(), stamp, stamp)).lastrowid
-        set_note_links(conn, note_id, body.people, body.topics, body.entries)
+        note_id = conn.execute("INSERT INTO notes (title, text, place, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                               (blank_to_none(body.title), body.text.strip(), blank_to_none(body.place), stamp, stamp)).lastrowid
+        set_note_links(conn, note_id, body.people, body.topics, body.entries, body.sources)
         db.reindex_note(conn, note_id)
         conn.commit()
         return note_dict(conn, note_id)
@@ -628,10 +687,11 @@ def router(ctx: Context) -> APIRouter:
         changes = body.model_dump(exclude_unset=True)
         if "text" in changes and not blank_to_none(changes["text"]):
             raise HTTPException(422, "A note cannot be empty")
-        sets = {k: blank_to_none(changes[k]) for k in ("title", "text") if k in changes}
+        sets = {k: blank_to_none(changes[k]) for k in ("title", "text", "place") if k in changes}
         conn.execute(f"UPDATE notes SET {''.join(f'{k} = ?, ' for k in sets)}updated_at = ? WHERE id = ?",
                      (*sets.values(), db.now(), note_id))
-        set_note_links(conn, note_id, changes.get("people"), changes.get("topics"), changes.get("entries"))
+        set_note_links(conn, note_id, changes.get("people"), changes.get("topics"), changes.get("entries"),
+                       changes.get("sources"))
         db.forget_unused_people(conn)
         db.forget_unused_topics(conn)
         db.reindex_note(conn, note_id)

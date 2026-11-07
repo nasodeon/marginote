@@ -338,6 +338,8 @@ table.grid.settings tbody tr:hover { background: transparent; }
 
 .details { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 16px; max-width: 720px; width: 100%; margin: 0 auto; }
 .details > .seg { align-self: flex-start; }
+.details .fields { display: flex; flex-direction: column; gap: 16px; }
+.details .fields [hidden] { display: none; }
 .details .two { display: flex; gap: 16px; align-items: flex-end; }
 .save-bar { position: sticky; bottom: 0; padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1.2px solid var(--rule); background: var(--paper); }
 .save-bar .btn { max-width: 720px; margin: 0 auto; display: flex; }
@@ -404,6 +406,22 @@ table.grid td .sub { display: block; font-size: 14px; color: var(--grey); }
 .group-head { display: flex; justify-content: space-between; align-items: baseline; padding: 14px 16px 2px; font-weight: 700; }
 .group-head a { color: var(--ink); text-decoration: none; }
 .group-head .count { font-weight: 400; font-size: 15px; color: var(--grey); }
+.section-head { justify-content: flex-start; }
+.section-head h2 { flex: 1; }
+.group-head > :first-child { flex: 1; }
+/* +/− : fold a section or a group away; remembered on this device */
+.fold-btn { flex: none; align-self: center; width: 26px; height: 26px; margin-left: 10px; padding: 0; border: 0.6px solid var(--rule);
+  background: none; color: var(--grey); font: 400 17px/1 var(--serif); cursor: pointer; border-radius: 0; }
+.fold-btn:hover { color: var(--ink); border-color: var(--ink); }
+.folded { border-bottom-style: dotted; }
+.group-row { display: flex; align-items: center; }
+.group-row > .book-row { flex: 1; min-width: 0; }
+.group-row .fold-btn { margin: 0 16px 0 6px; }
+.fold-body[hidden] { display: none; }
+.note-block.fresh { background: var(--tint); }
+.note-sources { font-size: 16px; }
+.chip.source { font-style: italic; text-decoration: none; }
+.note-sources .plink + .plink::before { content: ', '; font-style: normal; }
 .top .chips { align-items: baseline; }
 .top .chips .label { margin-right: 2px; }
 .chip.serif { font-family: var(--serif); font-size: 16px; }
@@ -503,6 +521,9 @@ pre.code { margin: 0; padding: 10px 12px; background: var(--tint); font-family: 
   .colhead { margin-left: 40px; margin-right: 40px; padding-left: 0; padding-right: 0; }
   .list-end { margin-left: 40px; margin-right: 40px; }
   .book-row, .entry-row { margin: 0 24px; padding-left: 16px; padding-right: 16px; }
+  .group-row > .book-row { margin-right: 0; padding-right: 8px; }
+  .group-row .fold-btn { margin-right: 40px; }
+  .two-col .aside .fold-btn { margin-right: 0; }
   .wide-only { display: block; }
   .btn.wide-only { display: inline-flex; }
   .narrow-only { display: none !important; }

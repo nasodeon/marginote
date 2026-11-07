@@ -109,10 +109,10 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     entries = logged_in.get(f"/api/sources/{book['id']}/entries").json()
     assert [e["id"] for e in entries] == [thought["id"], quote["id"]]
     creuser = next(t for t in logged_in.get("/api/topics").json() if t["name"] == "à creuser")
-    assert logged_in.get("/api/entries", params={"topic_id": creuser["id"]}).json()[0]["kind"] == "comment"
+    assert logged_in.get("/api/entries", params={"topic_id": creuser["id"]}).json()[0]["id"] == thought["id"]
 
     listed = logged_in.get("/api/sources").json()[0]
-    assert listed["quote_count"] == 1 and listed["comment_count"] == 1
+    assert listed["quote_count"] == 2 and listed["note_count"] == 0
 
     topics = {t["name"]: t["entries"] for t in logged_in.get("/api/topics").json()}
     assert topics == {"méthode": 1, "épistémologie": 1, "à creuser": 1}
@@ -130,7 +130,8 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     # export
     md = logged_in.get(f"/api/sources/{book['id']}/export.md")
     assert md.status_code == 200
-    assert "> On fait la science" in md.text and "#maison" in md.text and "**Comment (p. 158):**" in md.text
+    assert "> On fait la science" in md.text and "#maison" in md.text and "> Comparer avec Duhem" in md.text
+    assert "Comment: Exemple parfait pour une introduction." in md.text
     assert "*Henri Poincaré*" in md.text
 
     # delete
@@ -362,17 +363,28 @@ def test_sources_have_a_kind_of_work(logged_in, monkeypatch):
     assert logged_in.patch(f"/api/sources/{book['id']}", json={"field": ""}).json()["field"] is None
 
 
-def test_comments_are_called_comments(logged_in, monkeypatch):
+def test_notes_on_a_source_and_comments_on_quotes(logged_in, monkeypatch):
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
     book = logged_in.post("/api/sources", json={"title": "Essais", "fetch_cover": False}).json()
-    c = logged_in.post("/api/entries", json={"source_id": book["id"], "kind": "comment", "text": "À relire.", "page": "12"}).json()
-    q = logged_in.post("/api/entries", json={"source_id": book["id"], "text": "Que philosopher, c'est apprendre à mourir."}).json()
-    assert c["kind"] == "comment" and q["kind"] == "quote"
-    assert [e["id"] for e in logged_in.get("/api/entries", params={"kind": "comment"}).json()] == [c["id"]]
-    assert logged_in.get(f"/api/sources/{book['id']}").json()["comment_count"] == 1
-    assert logged_in.patch(f"/api/entries/{q['id']}", json={"kind": "comment"}).json()["kind"] == "comment"
-    assert logged_in.patch(f"/api/entries/{q['id']}", json={"kind": None, "note": "x"}).json()["kind"] == "comment"
-    assert "**Comment (p. 12):** À relire." in logged_in.get(f"/api/sources/{book['id']}/export.md").text
+    q = logged_in.post("/api/entries", json={"source_id": book["id"], "text": "Que philosopher, c'est apprendre à mourir.",
+                                             "note": "Cicéron d'abord."}).json()
+    assert q["note"] == "Cicéron d'abord." and "kind" not in q
+    n = logged_in.post("/api/notes", json={"sources": [book["id"]], "title": "Plan", "place": "12", "text": "À relire.",
+                                           "topics": ["mort"]}).json()
+    assert n["sources"] == [{"id": book["id"], "kind": "book", "title": "Essais"}] and n["place"] == "12"
+    listed = logged_in.get(f"/api/sources/{book['id']}").json()
+    assert listed["quote_count"] == 1 and listed["note_count"] == 1
+    assert [x["id"] for x in logged_in.get("/api/notes", params={"source_id": book["id"]}).json()] == [n["id"]]
+    assert logged_in.get("/api/notes", params={"q": "essais"}).json()[0]["id"] == n["id"]   # found by its source
+    export = logged_in.get(f"/api/sources/{book['id']}/export.md").text
+    assert "Comment: Cicéron d'abord." in export and "## Notes" in export and "**Plan · 12**" in export
+    assert logged_in.patch(f"/api/notes/{n['id']}", json={"sources": [], "place": ""}).json()["sources"] == []
+    logged_in.patch(f"/api/notes/{n['id']}", json={"sources": [book["id"]]})
+    assert logged_in.patch(f"/api/notes/{n['id']}", json={"sources": [999]}).status_code == 404
+    # deleting the source keeps the note
+    logged_in.delete(f"/api/sources/{book['id']}")
+    kept = logged_in.get(f"/api/notes/{n['id']}").json()
+    assert kept["text"] == "À relire." and kept["sources"] == []
 
 
 def test_several_entries_deleted_at_once_and_book_kept(logged_in, monkeypatch):
