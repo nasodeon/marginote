@@ -24,7 +24,9 @@ from . import backup, db, dewarp, ocr, routes_admin, routes_entries, routes_libr
 from .config import Settings, load_settings
 from .context import Context
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
+# the release that gave the database its current shape: names the copy made before upgrading to it
+SHAPE_CHANGED_IN = "0.5.0"
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("marginote")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -70,7 +72,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ctx.files.make_folders()
     # an existing database is copied to backups/ before its shape changes: the way back to the old version
     db.migrate(settings.db_path, before_upgrade=lambda old: backup.before_upgrade(
-        settings.db_path, settings.backups_dir, VERSION))
+        settings.db_path, settings.backups_dir, SHAPE_CHANGED_IN))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):

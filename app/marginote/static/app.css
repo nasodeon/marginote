@@ -442,6 +442,8 @@ table.grid td .sub { display: block; font-size: 14px; color: var(--grey); }
 .fill-form { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
 .fill-form .details { flex: 1; }
 .capture-start .ask { margin: 4px 0 2px; font-size: 24px; line-height: 1.2; }
+.shared-text { margin: 0; padding: 2px 0 2px 14px; border-left: 1.2px solid var(--rule); font-style: italic; line-height: 1.4;
+  white-space: pre-line; overflow-wrap: anywhere; max-height: 9.8em; overflow: auto; }
 .link-line { word-break: break-all; font-style: normal; font-family: var(--tt); font-size: 13px; }
 .linked-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 0.6px solid var(--hair); }
 .linked-row .main, .pick .main { display: flex; flex-direction: column; flex: 1; min-width: 0; }

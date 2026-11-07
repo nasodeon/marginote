@@ -49,6 +49,7 @@ const ICONS = {
   link: 'M10 14l4-4M8.5 11.5 6 14a3.5 3.5 0 0 0 4 4l2.5-2.5M15.5 12.5 18 10a3.5 3.5 0 0 0-4-4l-2.5 2.5',
   note: 'M6 3h9l4 4v14H6zM15 3v4h4M9 11h7M9 14h7M9 17h4',
   external: 'M9 5h10v10M19 5 7 17',
+  paste: 'M9 3h6v4H9zM8 5H5v16h14V5h-3',
   inbox: 'M4 13h4l2 3h4l2-3h4M4 13l2-8h12l2 8v6H4z',
 };
 function icon(name, size = 18) {
@@ -1403,6 +1404,89 @@ function nudgeBar(sel) {
 
 const capture = { last: null };   // the photo just used, to take another passage from it
 
+// What another app shared or what was copied: a passage, a link, or both. Apple Books adds where the passage
+// is from ("Extrait de" then the title and the author); links to a book shop or a reader are left out.
+const SHOP_HOSTS = /(^|\.)(amazon\.[a-z.]+|a\.co|amzn\.to|kindle\.[a-z.]+|books\.apple\.com|itunes\.apple\.com|apple\.co|play\.google\.com|kobo\.com)$/i;
+const BOOKS_CITE = /^(Extrait de|Extrait du livre|Excerpt From|Excerpt from|Extracto de|Auszug aus|Estratto da)\b\s*:?\s*(.*)$/;
+const COPYRIGHT_LINE = /droits d.auteur|copyright|urheberrecht|derechos de autor|diritti d.autore/i;
+function parseShared(raw) {
+  let text = String(raw || '').replace(/\r\n?/g, '\n').replace(/ /g, ' ');
+  let url = null;
+  for (const m of text.match(/https?:\/\/[^\s<>"«»“”]+/gi) || []) {
+    let host = '';
+    try { host = new URL(m.replace(/[.,;:!?)\]]+$/, '')).hostname; } catch { continue; }
+    if (!url && !SHOP_HOSTS.test(host)) url = m.replace(/[.,;:!?)\]]+$/, '');
+  }
+  text = text.replace(/https?:\/\/[^\s<>"«»“”]+/gi, '');
+  const lines = text.split('\n');
+  let book = null;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const m = lines[i].trim().match(BOOKS_CITE);
+    if (!m) continue;
+    const rest = m[2].trim();
+    if (rest) {
+      // older form: "Extrait de: Rousseau, Jean-Jacques. « Les Confessions ». Apple Books."
+      const q = rest.match(/^(.*?)\.?\s*[«“"]\s*(.+?)\s*[»”"]/);
+      book = q ? { author: q[1].trim(), title: q[2].replace(/[.,]$/, '').trim() } : { author: '', title: rest.replace(/\.?\s*(Apple Books|iBooks)\.?$/i, '').trim() };
+    } else {
+      const after = lines.slice(i + 1).map((l) => l.trim()).filter((l) => l && !COPYRIGHT_LINE.test(l));
+      book = { title: after[0] || '', author: after[1] || '' };
+    }
+    lines.length = i;
+    break;
+  }
+  text = lines.join('\n').trim();
+  // the quotation marks put around a passage
+  const pair = text.match(/^([«“"„])\s*([\s\S]*?)\s*([»”"“])$/);
+  const closes = { '«': '»', '“': '”', '"': '"', '„': '“' };
+  if (pair && closes[pair[1]] === pair[3] && !pair[2].includes(pair[1])) text = pair[2];
+  if (book && !book.title) book = null;
+  return { text, url, book };
+}
+
+// the page title that Safari shares with a selection, when it came along with the passage
+function withoutTitle(text, ...titles) {
+  const same = (a, b) => {
+    const x = fold(a).replace(/\s+/g, ' ').trim();
+    const y = fold(b).replace(/\s+/g, ' ').trim();
+    return x && y && x.length < 300 && (x === y || (Math.min(x.length, y.length) > 8 && (x.includes(y) || y.includes(x))));
+  };
+  const lines = (text || '').split('\n');
+  for (const end of ['first', 'last']) {
+    const i = end === 'first' ? 0 : lines.length - 1;
+    if (lines.length > 1 && titles.some((t) => t && same(lines[i], t))) lines.splice(i, 1);
+    else if (lines.length === 1 && titles.some((t) => t && same(lines[0], t))) lines.length = 0;
+  }
+  return lines.join('\n').trim();
+}
+
+// "Les Confessions" and "Les Confessions (Édition intégrale)" are the same book
+function sameTitle(a, b) {
+  const key = (t) => fold(t).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const x = key(a);
+  const y = key(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length < y.length ? [x, y] : [y, x];
+  return short.length >= 6 && long.startsWith(short + ' ');
+}
+
+// once saved, going back to the shared address does not offer the same passage again
+function finishShared() {
+  try {
+    const kept = JSON.parse(sessionStorage.getItem('marginote.shared') || 'null');
+    if (kept?.raw) sessionStorage.setItem('marginote.sharedSaved', kept.raw);
+    sessionStorage.removeItem('marginote.shared');
+  } catch { /* nothing kept */ }
+}
+
+// the shared text, read from the address as it is ("+" is kept as "+")
+function sharedParam() {
+  const m = location.hash.match(/[?&]share=([^&]*)/);
+  if (!m) return null;
+  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+}
+
 function sourceChoice(s, change) {
   return h('div', { class: 'book-choice' }, thumb(s),
     h('div', { class: 'main' }, h('div', { class: 't', text: s.title }), h('div', { class: 'muted' }, sourceLine(s))),
@@ -1423,18 +1507,34 @@ async function viewCapture({ params }) {
   let photo = null;
   let range = null;
   let startedHere = false;     // whether "Back" leads to the first screen of this capture
+  let shared = null;           // a passage shared from another app or pasted, waiting for its source
+  let sharedFromStart = false;
 
   const leave = (left) => left || cancelButton('');
   const backTo = (fn, label = 'Back') => h('button', { class: 'link-btn', type: 'button', onclick: () => fn() }, icon('back', 20), label);
+  const home = () => (shared ? stepShared(shared) : stepStart());
+  const keepShared = (sh = shared) => { try { sessionStorage.setItem('marginote.shared', JSON.stringify(sh)); } catch { /* not kept */ } };
+  const sharedCarry = () => (shared ? (keepShared(), '&shared=1') : '');
+
+  // a passage and/or a link: a link goes to the page's form, a passage alone asks where it is from
+  function takeShared(sh, fromStart = false) {
+    if (!sh.text && !sh.url) { stepPaste('Nothing to keep in what was shared.'); return; }
+    sharedFromStart = fromStart;
+    if (sh.url) { keepShared(sh); stepLink(sh.url, '', sh.text, Boolean(sh.raw)); return; }
+    shared = sh;
+    keepShared();
+    stepShared(sh);
+  }
 
   function stepStart() {
     cleanup();
     startedHere = true;
+    shared = null;
     const recent = sources.slice(0, 4);
     const paste = async () => {
       let text = '';
-      try { text = (await navigator.clipboard.readText()).trim(); } catch { /* not allowed: type it instead */ }
-      stepLink(/^https?:\/\/\S+$/i.test(text) ? text : '');
+      try { text = await navigator.clipboard.readText(); } catch { /* not allowed: paste it by hand */ }
+      if (text.trim()) takeShared(parseShared(text), true); else stepPaste();
     };
     const newRow = (ic, title, sub, onclick) => h('button', { type: 'button', class: 'pick', onclick },
       h('span', { class: 'slot small icon-slot' }, icon(ic, 26)), h('span', { class: 'main' }, h('span', { class: 't', text: title }), h('span', { class: 'a', text: sub })));
@@ -1444,7 +1544,7 @@ async function viewCapture({ params }) {
         h('h1', { class: 'ask', text: 'What are you reading or watching?' }),
         aboutPreset?.length ? h('p', { class: 'note-line' }, `About ${aboutPreset[0].name}.`) : null,
         topicPreset?.length ? h('p', { class: 'note-line' }, `On ${topicPreset[0]}.`) : null,
-        h('button', { class: 'btn', type: 'button', onclick: paste, style: { alignSelf: 'flex-start' } }, icon('link', 18), 'Paste a copied link')),
+        h('button', { class: 'btn', type: 'button', onclick: paste, style: { alignSelf: 'flex-start' } }, icon('paste', 18), 'Paste what you copied')),
       recent.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'continue' })),
         recent.map((s) => h('button', { type: 'button', class: 'pick', onclick: () => { startedHere = true; stepSource(s); } }, thumb(s),
           h('span', { class: 'main' }, h('span', { class: 't', text: s.title }), h('span', { class: 'a' }, sourceLine(s))))),
@@ -1461,7 +1561,7 @@ async function viewCapture({ params }) {
         icon('inbox', 18), 'Photos to sort later')));
   }
 
-  function stepPick(then) {
+  function stepPick(then, back) {
     cleanup();
     const q = h('input', { type: 'search', placeholder: 'Find a source', 'aria-label': 'Find a source' });
     const list = h('div');
@@ -1474,9 +1574,9 @@ async function viewCapture({ params }) {
     q.addEventListener('input', draw);
     draw();
     put(root,
-      bar(source || startedHere ? backTo(() => (source ? stepSource(source) : stepStart())) : leave(), 'Source'),
+      bar(back ? backTo(back) : source || startedHere ? backTo(() => (source ? stepSource(source) : home())) : leave(), 'Source'),
       h('div', { class: 'pad' }, h('label', { class: 'search' }, icon('search', 16), q),
-        h('a', { class: 'btn small', href: `#/source/new?then=capture${carry ? '&' + carry : ''}`, style: { alignSelf: 'flex-start' } }, '+ New source')),
+        h('a', { class: 'btn small', href: `#/source/new?then=capture${carry ? '&' + carry : ''}${sharedCarry()}`, style: { alignSelf: 'flex-start' } }, '+ New source')),
       list);
     setTimeout(() => q.focus(), 50);
   }
@@ -1494,7 +1594,7 @@ async function viewCapture({ params }) {
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (ev) => { ev.preventDefault(); drop.classList.remove('over'); const f = ev.dataTransfer.files[0]; if (f) send(f); });
     put(root,
-      bar(startedHere ? backTo(stepStart) : leave(), ''),
+      bar(startedHere ? backTo(home) : leave(), ''),
       h('div', { class: 'capture-start' },
         sourceChoice(s, () => stepPick((x) => stepSource(x))),
         root.dataset.error ? h('div', { class: 'error', role: 'alert', text: root.dataset.error }) : null,
@@ -1542,13 +1642,77 @@ async function viewCapture({ params }) {
     const input = (camera) => h('input', { type: 'file', accept: 'image/*', multiple: !camera, capture: camera ? 'environment' : null,
       'aria-label': camera ? 'Take a photo' : 'Choose photos', onchange: (ev) => { add([...ev.target.files]); ev.target.value = ''; } });
     put(root,
-      bar(s ? backTo(() => stepSource(s)) : startedHere ? backTo(stepStart) : leave(), 'Sort later',
+      bar(s ? backTo(() => stepSource(s)) : startedHere ? backTo(home) : leave(), 'Sort later',
         h('a', { class: 'link-btn strong', href: '#/inbox', onclick: (ev) => { ev.preventDefault(); nav.replace('inbox'); } }, 'Done')),
       h('div', { class: 'capture-start' },
         s ? sourceChoice(s) : h('p', { class: 'note-line', text: 'You choose the source of each page when you sort it.' }),
         coarse() ? h('label', { class: 'btn primary big file-btn' }, icon('camera', 20), 'Take a photo', input(true)) : null,
         h('label', { class: `btn big file-btn${coarse() ? '' : ' primary'}` }, icon('image', 20), 'Choose photos', input(false)),
         counter, sent));
+  }
+
+  // what was copied, pasted by hand when the browser does not let the app read it
+  function stepPaste(msg = '') {
+    cleanup();
+    root.classList.remove('fill-screen');
+    const area = h('textarea', { class: 'textarea', rows: 8, id: 'p-text' });
+    const say = h('div', { class: 'note-line', role: 'alert', text: msg });
+    const next = (ev) => {
+      ev.preventDefault();
+      const sh = parseShared(area.value);
+      if (!sh.text && !sh.url) { say.textContent = 'Paste a passage or a link.'; area.focus(); return; }
+      takeShared(sh, true);
+    };
+    put(root, h('form', { class: 'fill-form', onsubmit: next },
+      bar(backTo(stepStart), 'Paste'),
+      h('div', { class: 'details' },
+        h('label', { class: 'field', for: 'p-text' }, h('span', { text: 'a passage, a link, or both' }), area),
+        h('p', { class: 'note-line', text: coarse() ? 'Touch the box, then Paste.' : 'Click the box and paste (Ctrl+V).' }),
+        say),
+      h('div', { class: 'save-bar' }, h('button', { class: 'btn primary big', type: 'submit' }, 'Next'))));
+    setTimeout(() => area.focus(), 50);
+  }
+
+  // a passage shared from another app, or pasted: which source is it from?
+  function stepShared(sh) {
+    cleanup();
+    root.classList.remove('fill-screen');
+    source = null;
+    const useSource = (s) => { source = s; prefs.set('captureSource', s.id); stepDetails(sh.text); };
+    const row = (ic, title, sub, onclick) => h('button', { type: 'button', class: 'pick', onclick },
+      h('span', { class: 'slot small icon-slot' }, icon(ic, 26)),
+      h('span', { class: 'main' }, h('span', { class: 't', text: title }), sub ? h('span', { class: 'a', text: sub }) : null));
+    const sourcePick = (s, on) => h('button', { type: 'button', class: `pick${on ? ' on' : ''}`, onclick: () => useSource(s) }, thumb(s),
+      h('span', { class: 'main' }, h('span', { class: 't', text: s.title }), h('span', { class: 'a' }, sourceLine(s))));
+    const b = sh.book;   // the book Apple Books names under the passage
+    const match = b ? sources.find((s) => sameTitle(s.title, b.title)) : null;
+    const createBook = async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        const s = await api('/api/sources', { method: 'POST', body: { kind: 'ebook', title: b.title, people: { author: b.author ? [b.author] : [] } } });
+        store.changed();
+        sources.unshift(s);
+        useSource(s);
+      } catch (err) { btn.disabled = false; toast(err.message); }
+    };
+    const recent = sources.filter((s) => s !== match).slice(0, 4);
+    put(root,
+      bar(sharedFromStart ? backTo(stepStart) : leave(), 'Shared'),
+      h('div', { class: 'capture-start' },
+        h('h1', { class: 'ask', text: 'Where is it from?' }),
+        h('blockquote', { class: 'shared-text', text: shorten(sh.text, 420) })),
+      b ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'named with the passage' })),
+        match ? sourcePick(match, true) : row('book', `New ebook: ${b.title}`, b.author || 'From Apple Books', createBook)] : null,
+      recent.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'recent' })),
+        recent.map((s) => sourcePick(s)),
+        sources.length > recent.length ? h('button', { type: 'button', class: 'more-btn', onclick: () => stepPick(useSource, () => stepShared(sh)) }, 'Something else from the library ›') : null] : null,
+      h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'something new' })),
+      row('link', 'A web page, a video or a podcast', 'Paste its link; the passage is kept with it', () => stepLink('', '', sh.text)),
+      row('book', 'A book, a talk, anything else', 'Type its title and who wrote it',
+        () => go(`source/new?kind=${b ? 'ebook' : 'book'}&then=capture${carry ? '&' + carry : ''}${sharedCarry()}`)),
+      row('note', 'Your own note', 'Keep it as a note on a person or a topic', () => go(`note/new?shared=1${carry ? '&' + carry.replace('about=', 'person=') : ''}`)),
+      h('div', { class: 'list-end' }));
   }
 
   async function send(file) {
@@ -1616,18 +1780,21 @@ async function viewCapture({ params }) {
           nav.replace('inbox');
           toast('Saved', { label: 'Another from this page', run: () => go(`capture?photo=${photo.id}`) });
         } else {
+          if (shared) finishShared();
           nav.flash = { entry: e.id };
           nav.finish(`source/${body.source_id}`);
           toast('Saved', fromPhoto ? { label: 'Another from this page', run: () => go('capture?again=1') } : null);
         }
       } catch (err) { saveBtn.disabled = false; toast(err.message); }
     };
-    const back = fromPhoto ? backTo(stepSelect, 'Passage') : photo && typedWithPhoto ? backTo(stepSelect) : k.photos ? backTo(() => stepSource(source))
-      : startedHere ? backTo(stepStart) : leave();
+    const back = fromPhoto ? backTo(stepSelect, 'Passage') : photo && typedWithPhoto ? backTo(stepSelect) : shared ? backTo(home)
+      : k.photos ? backTo(() => stepSource(source)) : startedHere ? backTo(home) : leave();
     put(root, h('form', { onsubmit: save, class: 'fill-form' },
       bar(back, shorten(source.title, 32)),
       h('div', { class: 'details' },
-        k.link && !photo ? sourceChoice(source, () => stepPick((s) => { source = s; stepSource(s); })) : null,
+        k.link && !photo ? sourceChoice(source, shared
+          ? () => { shared.text = text.value; stepPick((s) => { source = s; stepDetails(shared.text); }, () => stepDetails(shared.text)); }
+          : () => stepPick((s) => { source = s; stepSource(s); })) : null,
         fromPhoto ? null : kindSeg,
         h('label', { class: 'field', for: 'c-text' }, textLabel, text),
         source.url && !photo ? h('a', { class: 'filter ink', href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `open the ${source.kind === 'article' ? 'article' : source.kind} ›`) : null,
@@ -1635,19 +1802,20 @@ async function viewCapture({ params }) {
       h('div', { class: 'save-bar' }, saveBtn)));
     const pageInput = document.getElementById('f-page');
     if (pageInput && photo?.detected_page && fromPhoto && !pageInput.value) pageInput.value = photo.detected_page;
-    if (!fromPhoto) setTimeout(() => text.focus(), 50);
+    if (!fromPhoto && !selectedText) setTimeout(() => text.focus(), 50);
   }
 
   // a link shared from another app, the bookmark, or pasted: the page is read, then the quote is saved with it
-  async function stepLink(url, title = '', quoted = '') {
+  async function stepLink(url, title = '', quoted = '', fromShortcut = false) {
     cleanup();
     root.classList.remove('fill-screen');
     if (!url) {
       const input = h('input', { class: 'input', type: 'url', id: 'l-url', placeholder: 'https://…', autocapitalize: 'none', autocorrect: 'off', inputmode: 'url' });
       const msg = h('div', { class: 'note-line', role: 'alert' });
-      put(root, h('form', { onsubmit: (ev) => { ev.preventDefault(); if (input.value.trim()) stepLink(input.value.trim()); else msg.textContent = 'Paste or type a link'; } },
-        bar(startedHere ? backTo(stepStart) : leave(), 'Link'),
+      put(root, h('form', { onsubmit: (ev) => { ev.preventDefault(); if (input.value.trim()) stepLink(input.value.trim(), title, quoted); else msg.textContent = 'Paste or type a link'; } },
+        bar(startedHere || shared ? backTo(home) : leave(), 'Link'),
         h('div', { class: 'details' },
+          quoted ? h('blockquote', { class: 'shared-text', text: shorten(quoted, 300) }) : null,
           h('label', { class: 'field', for: 'l-url' }, h('span', { text: 'link to the article, video or podcast' }), input),
           h('div', { class: 'row-btns' },
             h('button', { class: 'btn small', type: 'button', onclick: async () => {
@@ -1667,8 +1835,15 @@ async function viewCapture({ params }) {
       if (err.status === 401) return;
       info = { url, kind: 'article', title: null, site: null, people: [], date: null, note: err.message };
     }
+    if (info.existing) source = sources.find((s) => s.id === info.existing.id) || await api(`/api/sources/${info.existing.id}`);
+    // Safari shares the page title along with the selection
+    quoted = withoutTitle(quoted, title, info.title, info.existing ? source.title : null);
+    if (fromShortcut && !info.existing && !info.title && !title) {
+      // the page could not be read: its title is then the short first line Safari sent
+      const lines = quoted.split('\n');
+      if (lines.length > 1 && lines[0].trim().length <= 160) { title = lines[0].trim(); quoted = lines.slice(1).join('\n').trim(); }
+    }
     if (info.existing) {
-      source = sources.find((s) => s.id === info.existing.id) || await api(`/api/sources/${info.existing.id}`);
       linkForm(null, quoted, info.note);
     } else {
       linkForm(info, quoted, info.note, title);
@@ -1719,6 +1894,7 @@ async function viewCapture({ params }) {
         }
         const e = await api('/api/entries', { method: 'POST', body: { ...values, source_id: sid, kind, text: text.value } });
         store.changed();
+        finishShared();
         nav.flash = { entry: e.id, cover: info?.image_url ? sid : null };
         nav.replace(`source/${sid}`);
         toast('Saved');
@@ -1726,7 +1902,7 @@ async function viewCapture({ params }) {
     };
     if (info) setKind(sourceKind);
     put(root, h('form', { onsubmit: save, class: 'fill-form' },
-      bar(startedHere ? backTo(stepStart) : leave(), source ? 'In your library' : 'New source'),
+      bar(startedHere || shared ? backTo(home) : leave(), source ? 'In your library' : 'New source'),
       h('div', { class: 'details' },
         note ? h('div', { class: 'note-line', role: 'status', text: `${note}. Type the details in.` }) : null,
         source ? sourceChoice(source) : [
@@ -1749,6 +1925,13 @@ async function viewCapture({ params }) {
     source = sources.find((s) => s.id === photo.source_id);
     if (source) stepSelect();
     else stepPick(async (s) => { source = s; await api(`/api/photos/${photo.id}`, { method: 'PATCH', body: { source_id: s.id } }).catch(() => null); stepSelect(); });
+  } else if (params.has('share')) {
+    // from the iPhone Shortcut: whatever another app shared (a passage, a link, or both)
+    const raw = sharedParam();
+    let saved = null;
+    try { saved = sessionStorage.getItem('marginote.sharedSaved'); } catch { /* none */ }
+    if (raw && raw === saved) stepStart();
+    else takeShared({ ...parseShared(raw), raw });
   } else if (params.get('u') || params.get('url')) {
     stepLink(params.get('u') || params.get('url'), params.get('t') || '', params.get('q') || '');
   } else if (params.get('again') && capture.last) {
@@ -1757,7 +1940,8 @@ async function viewCapture({ params }) {
     if (source) stepSelect(); else stepStart();
   } else if (params.get('source')) {
     const s = sources.find((x) => String(x.id) === params.get('source')) || await api(`/api/sources/${params.get('source')}`);
-    stepSource(s);
+    try { shared = params.get('shared') ? JSON.parse(sessionStorage.getItem('marginote.shared')) : null; } catch { shared = null; }
+    if (shared?.text) { source = s; stepDetails(shared.text); } else { shared = null; stepSource(s); }
   } else {
     stepStart();
   }
@@ -1816,7 +2000,7 @@ async function viewSourceForm({ args: [id], params }) {
   const s = source || { people: { author: [], speaker: [], translator: [], editor: [], about: [] }, topics: [] };
   const aboutPreset = params.get('about') ? people.filter((p) => String(p.id) === params.get('about')) : [];
   const topicPreset = params.get('topic') ? topics.filter((t) => String(t.id) === params.get('topic')).map((t) => t.name) : [];
-  const carry = ['about', 'topic'].filter((k) => params.get(k)).map((k) => `&${k}=${params.get(k)}`).join('');
+  const carry = ['about', 'topic', 'shared'].filter((k) => params.get(k)).map((k) => `&${k}=${params.get(k)}`).join('');
   const isbn = field('s-isbn', 'isbn', { inputmode: 'numeric', autocomplete: 'off' }, s.isbn);
   const url = field('s-url', 'link', { type: 'url', inputmode: 'url', autocapitalize: 'none', autocorrect: 'off', placeholder: 'https://…' }, s.url);
   const title = field('s-title', 'title', { required: true, autocapitalize: 'sentences' }, s.title);
@@ -2142,6 +2326,9 @@ async function viewNoteForm({ args: [id], params }) {
     const topic = topics.find((t) => String(t.id) === params.get('topic'));
     if (person) n.people = [person];
     if (topic) n.topics = [topic];
+    if (params.get('shared')) {
+      try { n.text = JSON.parse(sessionStorage.getItem('marginote.shared'))?.text || ''; } catch { /* nothing kept */ }
+    }
     if (params.get('entry')) {
       const e = await api(`/api/entries/${params.get('entry')}`).catch(() => null);
       if (e) {
@@ -2191,6 +2378,7 @@ async function viewNoteForm({ args: [id], params }) {
       } else {
         const created = await api('/api/notes', { method: 'POST', body });
         store.changed();
+        if (params.get('shared')) finishShared();
         toast('Note saved');
         if (nav.prev() && (params.get('person') || params.get('topic') || params.get('entry'))) nav.back(`note/${created.id}`);
         else nav.replace(`note/${created.id}`);
@@ -2221,10 +2409,8 @@ function bookmarklet() {
     + `window.open('${target}'+encodeURIComponent(location.href)+'&t='+encodeURIComponent(document.title)+'&q='+encodeURIComponent(q),'_blank')})()`;
 }
 
-function shortcutScript() {
-  return `var q = String(window.getSelection()).trim().slice(0, 4000);
-completion('${location.origin}/#/capture?u=' + encodeURIComponent(location.href) + '&t=' + encodeURIComponent(document.title) + '&q=' + encodeURIComponent(q));`;
-}
+// what the iPhone Shortcut opens, followed by what was shared
+function shareAddress() { return `${location.origin}/#/capture?share=`; }
 
 async function viewSettings() {
   const [health, backups] = await Promise.all([api('/api/health'), api('/api/backup/status')]);
@@ -2265,17 +2451,21 @@ async function viewSettings() {
       h('h3', { class: 'sub-title', text: 'On a computer: a bookmark' }),
       h('p', {}, 'Drag this button to your bookmarks bar, once. Then select text on any page and click the bookmark: the page opens here, with the passage, its link and its title filled in.'),
       h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Drag it to the bookmarks bar'); } }, '→ Marginote'),
-      h('h3', { class: 'sub-title', text: 'On the iPhone: a Shortcut in the Share menu' }),
-      h('p', {}, 'Made once in Apple’s Shortcuts app (Raccourcis); it then appears as « Marginote » when you tap Share (Partager) in Safari. Log in to Marginote once in Safari too: the shortcut opens it there.'),
+      h('h3', { class: 'sub-title', text: 'On the iPhone: « Marginote » in every app’s Share menu' }),
+      h('p', {}, 'A shortcut made once in Apple’s Shortcuts app (Raccourcis). Then select text in any app (Safari, Notes, Mail, Books, a PDF…), tap Partager, then Marginote: this app opens with the passage and asks where it is from. A link shared on its own (YouTube, Podcasts, an article) opens its form here.'),
       steps([
-        'Open Shortcuts (Raccourcis), tap +, name the shortcut Marginote.',
-        'Tap ⓘ, turn on « Show in Share Sheet » (Afficher dans la feuille de partage), and keep only Safari web pages (Pages web Safari) among what it receives.',
-        'Add the action that runs JavaScript on the web page (search « JavaScript ») and replace its text with the script below.',
-        'Add the action « Open URLs » (Ouvrir les URL): it opens the JavaScript result.',
+        'In Raccourcis, tap + (top right). Tap the name at the top, « Renommer », and type Marginote.',
+        'Tap ⓘ (at the bottom, or in the menu under the name) and turn on « Dans la feuille de partage » (« Afficher dans la feuille de partage » on older iPhones), then OK. A first line appears: « Recevoir … ». Tap the blue word after « Recevoir », tap « Effacer », tick only « Texte » and « URL », then OK.',
+        'Add the action « Texte » (search box at the bottom). Touch inside its box and tap « Entrée du raccourci » in the bar above the keyboard.',
+        'Add the action that encodes text for an address: search « encod » and choose « Encoder l’URL » (it may be worded slightly differently). It takes the Texte above by itself; leave it on « Encoder ».',
+        'Add the action « URL ». Paste the address below in its box, then, right after it with no space, tap the result of the encoding step in the bar above the keyboard.',
+        'Add the action « Ouvrir les URL », then OK (top right).',
       ]),
-      h('pre', { class: 'code', text: shortcutScript() }),
-      copyBtn(shortcutScript(), 'Copy the script'),
-      h('p', { class: 'note-line', text: 'From the YouTube or Podcasts app, use Share › Copy link, then Capture › Paste a copied link here.' }),
+      h('pre', { class: 'code', text: shareAddress() }),
+      copyBtn(shareAddress(), 'Copy the address'),
+      h('p', { class: 'note-line', text: 'Done when: in Notes, you select a sentence, tap Partager (behind › in the small menu if needed), scroll down to Marginote, and this app opens on « Where is it from? » with your sentence. The first time, iOS asks whether the shortcut may open the address: Autoriser.' }),
+      h('p', { class: 'note-line', text: 'It opens in Safari: log in there once (the app on the Home Screen keeps its own login), with Tailscale on. To find Marginote at the top of the Share menu: « Modifier les actions… » at its bottom, then add it to Favoris.' }),
+      h('p', { class: 'note-line', text: 'An app without Partager in its menu (Kindle): Copy the passage, then here, Capture › Paste what you copied.' }),
       h('h2', { class: 'section-title', text: 'App' }),
       table([
         ['Version', health.version],
@@ -2345,8 +2535,9 @@ let renderCount = 0;
 let cleanupCurrent = null;
 async function render() {
   const raw = location.hash.replace(/^#\/?/, '');
-  const [path, qs] = raw.split('?');
-  const params = new URLSearchParams(qs || '');
+  const cut = raw.indexOf('?');
+  const path = cut < 0 ? raw : raw.slice(0, cut);
+  const params = new URLSearchParams(cut < 0 ? '' : raw.slice(cut + 1));
   const n = ++renderCount;
   const view = document.getElementById('view');
   const route = ROUTES.find(([re]) => re.test(path));

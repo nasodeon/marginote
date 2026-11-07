@@ -31,7 +31,7 @@ source author's unless you name someone else (a quote within a quote).
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
-  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.5.0`)
+  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.5.1`)
 
 ## Install
 
@@ -73,10 +73,16 @@ you look it up again). Quotes captured with 0.5.0 are not in the old database. T
 
 - **On a computer**: Settings has a «→ Marginote» button to drag to your bookmarks bar. Select text on any
   page and click it: Marginote opens with the passage, the link and the title filled in.
-- **On the iPhone**: an Apple Shortcut, made once, puts «Marginote» in Safari's Share menu. Settings lists
-  the four steps and the script to paste. It holds no password: it opens Marginote in Safari, where you are
-  signed in.
-- **From the YouTube or Podcasts app**: Share › Copy link, then Capture › Paste a copied link.
+- **On the iPhone**: an Apple Shortcut, made once, puts «Marginote» in the Share menu of every app. Select
+  text anywhere (Safari, Notes, Mail, Books, a PDF…), tap Share › Marginote: the app opens with the passage
+  and asks where it is from. Apple Books' "Excerpt from" line is read (the book is found in your library, or
+  made in one tap); from Safari, the page's link comes along; a link shared alone (YouTube, Podcasts) opens
+  its form. Settings lists the six steps (four actions: Text, URL Encode, URL, Open URLs). The shortcut
+  holds no password: it opens Marginote in Safari, where you are signed in.
+- **From an app without Share in its menu** (Kindle): copy the passage, then Capture › Paste what you
+  copied.
+
+The shortcut opens `https://<your address>/#/capture?share=` followed by what was shared, URL-encoded.
 
 ## Disk space
 
