@@ -8,7 +8,8 @@ through your private Tailscale network.
 
 - `app/` — the app: FastAPI, SQLite full-text search, Tesseract text recognition (French and English)
   with shadow removal and straightening of pages that curve toward the spine (Leptonica), page-number
-  detection, book details and covers from Open Library (Google Books as fallback)
+  detection, book details from Open Library, Google Books and the BnF catalogue, the ISBN read from a photo of
+  the back cover (barcode, or the printed number), and an inbox of photos sent to be sorted later
 - `app/marginote/static/` — the screens, for phone and computer, set like a LaTeX document: books (with their
   covers and subjects), a page per book (cover beside the title), all quotes and comments with filters, tags,
   and the capture flow (book → photo → passage → note and tags). Plain JavaScript; the fonts (Computer Modern
@@ -45,6 +46,19 @@ answers "conflicting options: hostname and the network mode"), which leaves it d
 - Page photos are stored as WebP: about 200-350 KB each, half the size of a JPEG of the same quality.
   Photos no quote uses are deleted after a day.
 - The database holds only text: a few MB even for thousands of quotes; 14 nightly copies are kept.
+- Photos in the inbox are kept until you sort them (they are not deleted after a day).
+
+## Backups
+
+Every night (03:00 in the container's time zone, `TZ`) the app writes a consistent copy of the database to
+`data/backups/` and keeps the last 14. Settings shows the last and next copy and the space used, makes a copy
+on demand, and downloads everything as one zip (database, photos, covers).
+
+These copies sit next to the database. Also back up the whole `data` folder from the NAS: snapshots of the
+shared folder, and a scheduled copy to another disk, run after the nightly copy.
+
+To restore: stop the project, move `marginote.db` (and any `marginote.db-wal`, `marginote.db-shm`) aside,
+copy a file from `backups/` to `data/marginote.db`, deploy again.
 
 ## Data
 
@@ -70,8 +84,9 @@ Set in the compose file's `environment` list; all optional.
 ## Privacy
 
 - Nothing leaves your server except book lookups: an ISBN, or a title and author when a cover is
-  searched. Details come from Open Library and Google Books; covers from those two and, by ISBN, from
-  Amazon's image server. Set `LOOKUPS_ENABLED=false` to turn all of them off.
+  searched. Details come from Open Library, Google Books and the BnF (Bibliothèque nationale de France);
+  covers from Open Library, Google Books and, by ISBN, Amazon's image server. Set `LOOKUPS_ENABLED=false`
+  to turn all of them off. A photo of a back cover is read on your server and not kept.
 - The app listens only inside the Tailscale container: it is not reachable from your local network
   or the internet, only from your own tailnet devices.
 - Page photos are stored without any metadata (no location, camera or date). The test page also

@@ -6,9 +6,11 @@ Interactive API documentation is served at /docs.
 
 import hashlib
 import hmac
+import io
 import json
 import logging
 import mimetypes
+import queue
 import re
 import sqlite3
 import threading
@@ -23,16 +25,16 @@ from typing import Literal
 
 import pytesseract
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import backup, db, dewarp, lookup, ocr
 from .config import Settings, load_settings
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 MAX_UPLOAD = 30 * 1024 * 1024
 BAD_IMAGE = (UnidentifiedImageError, OSError, Image.DecompressionBombError)
 # One page at a time: keeps memory predictable (about 270 MB at most) even if several photos arrive at once.
@@ -141,6 +143,11 @@ class EntryPatch(BaseModel):
 
 class DeleteIn(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=5000, description="Ids of the quotes and comments to delete")
+
+
+class PhotoPatch(BaseModel):
+    queued: bool | None = Field(None, description="false: take it out of the inbox")
+    book_id: int | None = None
 
 
 class SelectIn(BaseModel):
@@ -256,7 +263,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             log.warning("MARGINOTE_PASSWORD is empty: nobody can log in until you set it in the compose file")
         backup.start_maintenance(settings.db_path, settings.backups_dir, settings.backup_hour, settings.backups_kept,
                                  hourly=clean_unused_photos)
+        reader = threading.Thread(target=reader_loop, name="photo-reader", daemon=True)
+        reader.start()
+        conn = db.connect(settings.db_path)
+        try:   # photos sent before a restart and not read yet
+            for row in conn.execute("SELECT id FROM photos WHERE status = 'reading' ORDER BY created_at"):
+                reader_queue.put(row["id"])
+        finally:
+            conn.close()
         yield
+        reader_queue.put(None)
 
     # The session cookie holds this tag, derived from the password: changing the password logs every device out.
     login_tag = (
@@ -328,6 +344,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "height": row["height"],
             "image_url": f"/api/photos/{row['id']}/image",
             "detected_page": row["detected_page"],
+            "book_id": row["book_id"],
+            "queued": bool(row["queued"]),
+            "status": row["status"],
             "text": ocr.full_text(words),
             "words": ocr.words_to_dicts(words),
             "created_at": row["created_at"],
@@ -384,7 +403,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         conn = db.connect(settings.db_path)
         try:
             rows = conn.execute(
-                "SELECT id, path FROM photos p WHERE created_at < ? "
+                "SELECT id, path FROM photos p WHERE created_at < ? AND queued = 0 AND status != 'reading' "
                 "AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.photo_id = p.id)",
                 (cutoff,),
             ).fetchall()
@@ -404,6 +423,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     refile_photos()
     clean_unused_photos()
+
+    def read_photo(data: bytes) -> tuple[bytes, int, int, list, str | None]:
+        """Open, straighten and read a photo, one at a time. Returns (file to keep, width, height, words, page)."""
+        with OCR_SLOT:
+            img = ocr.normalize_photo(data)
+            reading = ocr.read_page(img, settings.ocr_langs, straighten=settings.straighten_pages)
+            # keep the straightened photo when there is one: word positions refer to it
+            result = (ocr.to_stored(reading.photo), img.width, img.height, reading.words, reading.page)
+            del img, reading
+        return result
+
+    # Photos sent to the inbox are read here, in the background, so the phone can send several and close.
+    reader_queue: queue.Queue = queue.Queue()
+
+    def read_queued_photo(photo_id: str) -> None:
+        conn = db.connect(settings.db_path)
+        try:
+            row = conn.execute("SELECT * FROM photos WHERE id = ?", (photo_id,)).fetchone()
+            if not row or row["status"] != "reading":
+                return
+            source = settings.photos_dir / row["path"]
+            try:
+                stored, width, height, words, page = read_photo(source.read_bytes())
+            except (*BAD_IMAGE, pytesseract.TesseractError):
+                log.exception("Could not read a photo from the inbox")
+                conn.execute("UPDATE photos SET status = 'failed' WHERE id = ?", (photo_id,))
+                conn.commit()
+                return
+            rel = Path(INBOX) / f"{photo_id}{ocr.PHOTO_SUFFIX}"
+            (settings.photos_dir / rel).write_bytes(stored)
+            conn.execute(
+                "UPDATE photos SET path = ?, width = ?, height = ?, ocr_json = ?, detected_page = ?, status = 'ready' "
+                "WHERE id = ?",
+                (str(rel), width, height, json.dumps(ocr.words_to_dicts(words), ensure_ascii=False), page, photo_id),
+            )
+            conn.commit()
+            if source != settings.photos_dir / rel:
+                source.unlink(missing_ok=True)
+        finally:
+            conn.close()
+
+    def reader_loop() -> None:
+        while True:
+            photo_id = reader_queue.get()
+            if photo_id is None:
+                return
+            try:
+                read_queued_photo(photo_id)
+            except Exception:
+                log.exception("Reading a photo from the inbox failed")
 
     def fetch_cover_in_background(book_id: int, isbn: str | None, title: str, authors: str | None) -> None:
         try:
@@ -441,6 +510,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "ocr_languages": [lang for lang in wanted if lang in installed],
             "missing_ocr_languages": [lang for lang in wanted if lang not in installed],
             "straighten_pages": settings.straighten_pages and dewarp.available(),
+            "barcode_reader": ocr.zxingcpp is not None,
             "lookups_enabled": settings.lookups_enabled,
             "password_set": bool(settings.password),
         }
@@ -585,10 +655,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(422, "This ISBN looks wrong: check the digits on the back cover")
         if not settings.lookups_enabled:
             raise HTTPException(409, "Online lookups are turned off (LOOKUPS_ENABLED=false)")
-        found = lookup.lookup_isbn(clean)
+        try:
+            found = lookup.lookup_isbn(clean)
+        except lookup.LookupUnavailable:
+            raise HTTPException(503, "The book services could not be reached from your server; type the details in")
         if not found:
             raise HTTPException(404, "No book found for this ISBN; type the details in instead")
         return found
+
+    @app.post("/api/lookup/isbn-photo", tags=["books"], dependencies=auth)
+    def isbn_from_photo(file: UploadFile = File(...)):
+        """Read the ISBN on a photo of the back cover: the barcode, else the printed number. The photo is not kept."""
+        data = file.file.read(MAX_UPLOAD + 1)
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(413, "Photo larger than 30 MB")
+        with OCR_SLOT:
+            try:
+                img = ocr.normalize_photo(data)
+            except BAD_IMAGE:
+                raise HTTPException(415, "This file is not an image the app can read")
+            try:
+                isbn, found_by = ocr.find_isbn(img, settings.ocr_langs)
+            except pytesseract.TesseractError:
+                isbn, found_by = None, ""
+            del img
+        if not isbn:
+            raise HTTPException(404, "No ISBN found on this photo: take the barcode closer, or type the number")
+        return {"isbn": isbn, "found_by": found_by}
 
     @app.get("/api/books/{book_id}/export.md", tags=["books"], dependencies=auth)
     def export_book(book_id: int, conn: sqlite3.Connection = Depends(get_db)):
@@ -628,58 +721,127 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ----- photos -----
 
     @app.post("/api/photos", tags=["photos"], dependencies=auth)
-    def upload_photo(file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_db)):
+    def upload_photo(
+        file: UploadFile = File(...),
+        later: bool = Query(False, description="Put it in the inbox, read it in the background, sort it later"),
+        book_id: int | None = Query(None, description="The book it comes from"),
+        conn: sqlite3.Connection = Depends(get_db),
+    ):
         """Send a photo of a page. Returns every recognized word (with its position) and the page number if found.
 
-        The photo waits in photos/inbox. Saving a quote from it files it under the book's folder;
-        a photo no quote uses is deleted after UNUSED_PHOTO_HOURS (24 h by default).
+        With later=true the answer comes at once (status "reading") and the photo waits in the inbox until you
+        sort it; otherwise it is read straight away. Saving a quote from a photo files it under the book's folder;
+        a photo no quote uses, and not in the inbox, is deleted after UNUSED_PHOTO_HOURS (24 h by default).
         """
         data = file.file.read(MAX_UPLOAD + 1)
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "Photo larger than 30 MB")
+        if book_id is not None:
+            load_book(conn, book_id)
         sha = hashlib.sha256(data).hexdigest()
         existing = conn.execute("SELECT * FROM photos WHERE sha256 = ?", (sha,)).fetchone()
         if existing:
-            return photo_dict(existing)
-        with OCR_SLOT:
+            if later:
+                conn.execute("UPDATE photos SET queued = 1, book_id = COALESCE(?, book_id) WHERE id = ?",
+                             (book_id, existing["id"]))
+                conn.commit()
+            return photo_dict(load_photo(conn, existing["id"]))
+        photo_id = uuid.uuid4().hex
+        if later:
             try:
-                img = ocr.normalize_photo(data)
+                Image.open(io.BytesIO(data))   # reads only the header: refuse what is not an image now
             except BAD_IMAGE:
                 raise HTTPException(415, "This file is not an image the app can read")
-            try:
-                reading = ocr.read_page(img, settings.ocr_langs, straighten=settings.straighten_pages)
-            except pytesseract.TesseractError:
-                log.exception("Tesseract failed")
-                raise HTTPException(500, "Text recognition failed on this photo; try taking it again")
-            # keep the straightened photo when there is one: word positions refer to it
-            stored = ocr.to_stored(reading.photo)
-            words, page = reading.words, reading.page
-            width, height = img.width, img.height
-            del img, reading
-        photo_id = uuid.uuid4().hex
+            rel = Path(INBOX) / f"{photo_id}.upload"
+            target = settings.photos_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            conn.execute(
+                "INSERT INTO photos (id, path, width, height, sha256, ocr_json, created_at, book_id, queued, status) "
+                "VALUES (?, ?, 0, 0, ?, '[]', ?, ?, 1, 'reading')",
+                (photo_id, str(rel), sha, db.now(), book_id),
+            )
+            conn.commit()
+            reader_queue.put(photo_id)
+            return photo_dict(load_photo(conn, photo_id))
+        try:
+            stored, width, height, words, page = read_photo(data)
+        except BAD_IMAGE:
+            raise HTTPException(415, "This file is not an image the app can read")
+        except pytesseract.TesseractError:
+            log.exception("Tesseract failed")
+            raise HTTPException(500, "Text recognition failed on this photo; try taking it again")
         rel = Path(INBOX) / f"{photo_id}{ocr.PHOTO_SUFFIX}"
         target = settings.photos_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(stored)
         conn.execute(
-            "INSERT INTO photos (id, path, width, height, sha256, ocr_json, detected_page, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO photos (id, path, width, height, sha256, ocr_json, detected_page, created_at, book_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (photo_id, str(rel), width, height, sha,
-             json.dumps(ocr.words_to_dicts(words), ensure_ascii=False), page, db.now()),
+             json.dumps(ocr.words_to_dicts(words), ensure_ascii=False), page, db.now(), book_id),
         )
         conn.commit()
         return photo_dict(load_photo(conn, photo_id))
+
+    @app.get("/api/photos", tags=["photos"], dependencies=auth)
+    def list_inbox(conn: sqlite3.Connection = Depends(get_db)):
+        """The inbox: photos waiting to be sorted, oldest first (without their words)."""
+        rows = conn.execute(
+            "SELECT p.id, p.book_id, p.status, p.detected_page, p.created_at, p.width, p.height, b.title AS book_title, "
+            "(SELECT COUNT(*) FROM entries e WHERE e.photo_id = p.id) AS entry_count "
+            "FROM photos p LEFT JOIN books b ON b.id = p.book_id WHERE p.queued = 1 ORDER BY p.created_at, p.id"
+        ).fetchall()
+        return [{**{k: r[k] for k in r.keys()}, "image_url": f"/api/photos/{r['id']}/image",
+                 "thumb_url": f"/api/photos/{r['id']}/image?width=320"} for r in rows]
+
+    @app.patch("/api/photos/{photo_id}", tags=["photos"], dependencies=auth)
+    def update_photo(photo_id: str, body: PhotoPatch, conn: sqlite3.Connection = Depends(get_db)):
+        """Take a photo out of the inbox (queued=false), or change the book it comes from."""
+        load_photo(conn, photo_id)
+        if body.book_id is not None:
+            load_book(conn, body.book_id)
+            conn.execute("UPDATE photos SET book_id = ? WHERE id = ?", (body.book_id, photo_id))
+        if body.queued is not None:
+            conn.execute("UPDATE photos SET queued = ? WHERE id = ?", (int(body.queued), photo_id))
+        conn.commit()
+        return photo_dict(load_photo(conn, photo_id))
+
+    @app.delete("/api/photos/{photo_id}", tags=["photos"], dependencies=auth)
+    def delete_photo(photo_id: str, conn: sqlite3.Connection = Depends(get_db)):
+        """Delete a photo no quote uses (from the inbox, for example)."""
+        row = load_photo(conn, photo_id)
+        used = conn.execute("SELECT COUNT(*) FROM entries WHERE photo_id = ?", (photo_id,)).fetchone()[0]
+        if used:
+            raise HTTPException(409, f"This photo is used by {used} saved quote(s); delete them first")
+        conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+        conn.commit()
+        (settings.photos_dir / row["path"]).unlink(missing_ok=True)
+        return {"deleted": photo_id}
 
     @app.get("/api/photos/{photo_id}", tags=["photos"], dependencies=auth)
     def get_photo(photo_id: str, conn: sqlite3.Connection = Depends(get_db)):
         return photo_dict(load_photo(conn, photo_id))
 
     @app.get("/api/photos/{photo_id}/image", tags=["photos"], dependencies=auth)
-    def photo_image(photo_id: str, conn: sqlite3.Connection = Depends(get_db)):
-        path = settings.photos_dir / load_photo(conn, photo_id)["path"]
+    def photo_image(photo_id: str, width: int | None = Query(None, ge=64, le=1200, description="A smaller copy"),
+                    conn: sqlite3.Connection = Depends(get_db)):
+        row = load_photo(conn, photo_id)
+        path = settings.photos_dir / row["path"]
         if not path.is_file():
             raise HTTPException(404, "The photo file is missing from the photos folder")
-        return FileResponse(path, media_type=PHOTO_TYPES.get(path.suffix, "image/jpeg"), headers=PHOTO_CACHE)
+        headers = PHOTO_CACHE if row["status"] == "ready" else {"Cache-Control": "no-store"}
+        if width is None and path.suffix in PHOTO_TYPES:
+            return FileResponse(path, media_type=PHOTO_TYPES[path.suffix], headers=headers)
+        try:
+            with Image.open(path) as img:
+                img = ImageOps.exif_transpose(img).convert("RGB")
+                img.thumbnail((width or 1600, (width or 1600) * 2))
+                out = io.BytesIO()
+                img.save(out, format="WEBP", quality=72, method=2)
+        except BAD_IMAGE:
+            raise HTTPException(415, "This photo cannot be shown")
+        return Response(out.getvalue(), media_type="image/webp", headers=headers)
 
     @app.post("/api/photos/{photo_id}/select", tags=["photos"], dependencies=auth)
     def select_words(photo_id: str, body: SelectIn, conn: sqlite3.Connection = Depends(get_db)):
@@ -704,6 +866,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         page = blank_to_none(body.page)
         if body.photo_id:
             photo = load_photo(conn, body.photo_id)
+            if photo["status"] != "ready":
+                raise HTTPException(409, "This photo is still being read; try again in a few seconds")
             if not text and body.word_start is not None and body.word_end is not None:
                 text = ocr.select_range(photo_words(photo), body.word_start, body.word_end) or None
             if not page:
@@ -862,6 +1026,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return [{**entry_dict(conn, r), "snippet": r["snippet"]} for r in rows]
 
     # ----- maintenance -----
+
+    @app.get("/api/backup/status", tags=["status"], dependencies=auth)
+    def backup_status():
+        """The nightly database copies, when the next one runs, and how much space the data takes."""
+        now = datetime.now().astimezone()
+        done_today = (settings.backups_dir / f"marginote-{now:%Y-%m-%d}.db").exists()
+        next_run = now.replace(hour=settings.backup_hour, minute=0, second=0, microsecond=0)
+        if done_today or now.hour > settings.backup_hour:
+            next_run += timedelta(days=1)
+        def folder(path: Path) -> dict:
+            files = [f for f in path.rglob("*") if f.is_file()] if path.is_dir() else []
+            return {"count": len(files), "bytes": sum(f.stat().st_size for f in files)}
+        db_bytes = sum(p.stat().st_size for p in settings.data_dir.glob("marginote.db*") if p.is_file())
+        return {
+            "copies": backup.list_backups(settings.backups_dir),
+            "kept": settings.backups_kept,
+            "next": next_run.isoformat(timespec="minutes"),
+            "database_bytes": db_bytes,
+            "photos": folder(settings.photos_dir),
+            "covers": folder(settings.covers_dir),
+        }
+
+    @app.get("/api/backup/download", tags=["status"], dependencies=auth)
+    def backup_download():
+        """Everything in one zip: a consistent copy of the database, the page photos and the covers."""
+        name = f"marginote-{datetime.now():%Y-%m-%d}.zip"
+        return StreamingResponse(
+            backup.archive(settings.db_path, settings.data_dir, ("photos", "covers")),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
 
     @app.post("/api/backup", tags=["status"], dependencies=auth)
     def backup_now():

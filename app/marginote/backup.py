@@ -4,6 +4,9 @@ import logging
 import sqlite3
 import threading
 import time
+import uuid
+import zipfile
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +28,63 @@ def snapshot(db_path: Path, backups_dir: Path, keep: int) -> Path:
         path.unlink(missing_ok=True)
     log.info("Backup written to %s", target)
     return target
+
+
+def list_backups(backups_dir: Path) -> list[dict]:
+    """The database copies, newest first: file name, size and when it was written (local time)."""
+    copies = []
+    for path in sorted(backups_dir.glob("marginote-*.db"), reverse=True):
+        stat = path.stat()
+        copies.append({
+            "file": path.name,
+            "bytes": stat.st_size,
+            "written_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="minutes"),
+        })
+    return copies
+
+
+class _Pipe:
+    """Collects what zipfile writes, so the archive can be sent while it is being made."""
+
+    def __init__(self) -> None:
+        self.parts: list[bytes] = []
+
+    def write(self, data) -> int:
+        self.parts.append(bytes(data))
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def take(self) -> bytes:
+        out, self.parts = b"".join(self.parts), []
+        return out
+
+
+def archive(db_path: Path, data_dir: Path, folders: tuple[str, ...]) -> Iterator[bytes]:
+    """A zip of a fresh, consistent copy of the database plus the given folders, produced piece by piece:
+    nothing big is held in memory or written to disk."""
+    copy = data_dir / f".download-{uuid.uuid4().hex}.db"
+    src, dst = sqlite3.connect(db_path), sqlite3.connect(copy)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    pipe = _Pipe()
+    try:
+        with zipfile.ZipFile(pipe, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as z:
+            z.write(copy, "marginote.db", compress_type=zipfile.ZIP_DEFLATED)
+            yield pipe.take()
+            for name in folders:
+                folder = data_dir / name
+                for path in sorted(folder.rglob("*")) if folder.is_dir() else []:
+                    if path.is_file():
+                        z.write(path, f"{name}/{path.relative_to(folder).as_posix()}")   # images: stored as they are
+                        yield pipe.take()
+        yield pipe.take()
+    finally:
+        copy.unlink(missing_ok=True)
 
 
 def start_maintenance(db_path: Path, backups_dir: Path, hour: int, keep: int, hourly=None) -> None:

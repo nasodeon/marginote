@@ -78,7 +78,15 @@ SCHEMA_V3 = """
 ALTER TABLE books ADD COLUMN subject TEXT;   -- type or subject of the book: 'Philosophy', 'Novel'…
 """
 
-MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3]
+SCHEMA_V4 = """
+-- the inbox: photos sent to be sorted later, read in the background
+ALTER TABLE photos ADD COLUMN book_id INTEGER REFERENCES books(id) ON DELETE SET NULL;
+ALTER TABLE photos ADD COLUMN queued  INTEGER NOT NULL DEFAULT 0;        -- 1: waiting in the inbox
+ALTER TABLE photos ADD COLUMN status  TEXT NOT NULL DEFAULT 'ready';     -- 'reading', 'ready' or 'failed'
+CREATE INDEX photos_queued ON photos (queued);
+"""
+
+MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4]
 
 
 def now() -> str:

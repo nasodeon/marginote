@@ -280,6 +280,21 @@ dialog.confirm .choices { display: flex; flex-direction: column; gap: 8px; }
 .spinner { width: 16px; height: 16px; border: 1.5px solid var(--hair); border-top-color: var(--ink); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* inbox */
+.inbox-row { display: flex; gap: 12px; padding: 10px 16px; align-items: flex-start; }
+.inbox-row .thumb { width: 64px; height: 86px; object-fit: cover; flex: none; border: 0.5px solid var(--hair); background: var(--tint); }
+.inbox-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.inbox-row .t { font-weight: 700; }
+.inbox-row .a { font-size: 15px; color: var(--grey); }
+.inbox-row .actions { margin-top: 6px; }
+.bad { color: var(--danger); }
+.sent { display: flex; flex-direction: column; gap: 6px; }
+.sent-row { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--grey); font-style: italic; }
+.sent-row img { width: 40px; height: 54px; object-fit: cover; border: 0.5px solid var(--hair); }
+table.grid.settings tbody tr { cursor: default; }
+table.grid.settings tbody tr:hover { background: transparent; }
+@media (min-width: 960px) { .inbox-row { margin: 0 24px; padding-left: 16px; padding-right: 16px; } }
+
 /* passage selector */
 .selector { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sel-modes { display: flex; gap: 8px; align-items: center; padding: 6px 12px; border-bottom: 0.6px solid var(--rule); }

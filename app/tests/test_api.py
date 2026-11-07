@@ -2,6 +2,7 @@ import io
 import re
 
 from conftest import make_page
+from fastapi.testclient import TestClient
 from PIL import Image
 
 from marginote import dewarp, lookup, ocr
@@ -184,6 +185,7 @@ def test_photo_metadata_is_removed_and_rotation_applied(logged_in, settings):
 
 
 def test_isbn_lookup_merges_both_sources(monkeypatch):
+    monkeypatch.setattr(lookup, "_bnf", lambda isbn: {"_note": "not known"})
     monkeypatch.setattr(lookup, "_open_library", lambda isbn: {"title": "Walden", "authors": "Henry David Thoreau",
                                                                "publisher": None, "year": 2004})
     monkeypatch.setattr(lookup, "_google_books", lambda isbn: {"title": "Walden (ed.)", "publisher": "Penguin",
@@ -400,3 +402,151 @@ def test_database_from_an_older_version_gets_the_subject_column(settings):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
     assert conn.execute("SELECT title, subject FROM books").fetchall() == [("Walden", None)]
     conn.close()
+
+
+# ---------- ISBN from a photo of the back cover ----------
+
+def back_cover(isbn=None, printed=None) -> bytes:
+    import zxingcpp
+    from conftest import _font
+    from PIL import ImageDraw, ImageOps
+
+    page = Image.new("RGB", (1200, 1700), (236, 230, 220))
+    draw = ImageDraw.Draw(page)
+    draw.text((100, 200), "Un roman sur la lecture lente et les marges.", font=_font(40), fill=(40, 40, 40))
+    if isbn:
+        code = zxingcpp.create_barcode(isbn, zxingcpp.BarcodeFormat.EAN13).to_image(scale=4)
+        bars = Image.frombuffer("L", (code.shape[1], code.shape[0]), bytes(code), "raw", "L", 0, 1)
+        page.paste(ImageOps.expand(bars, 24, fill=255).convert("RGB"), (640, 1250))
+    if printed:
+        draw.text((100, 1350), printed, font=_font(42), fill=(20, 20, 20))
+    out = io.BytesIO()
+    page.save(out, format="JPEG", quality=90)
+    return out.getvalue()
+
+
+def test_isbn_read_from_the_barcode_or_the_printed_number(logged_in):
+    r = logged_in.post("/api/lookup/isbn-photo", files={"file": ("back.jpg", back_cover(isbn="9782070360024"), "image/jpeg")})
+    assert r.status_code == 200 and r.json() == {"isbn": "9782070360024", "found_by": "barcode"}
+    r = logged_in.post("/api/lookup/isbn-photo", files={"file": ("back.jpg", back_cover(printed="ISBN 2-07-036002-4"), "image/jpeg")})
+    assert r.status_code == 200 and r.json() == {"isbn": "9782070360024", "found_by": "text"}
+    r = logged_in.post("/api/lookup/isbn-photo", files={"file": ("back.jpg", back_cover(), "image/jpeg")})
+    assert r.status_code == 404
+    assert logged_in.get("/api/health").json()["barcode_reader"] is True
+
+
+def test_lookup_says_when_the_book_services_cannot_be_reached(logged_in, monkeypatch):
+    def down(isbn):
+        raise lookup.LookupUnavailable("all down")
+    monkeypatch.setattr(lookup, "lookup_isbn", down)
+    r = logged_in.get("/api/lookup/isbn/9782070360024")
+    assert r.status_code == 503 and "could not be reached" in r.json()["detail"]
+
+
+# ---------- inbox: photos to sort later ----------
+
+from marginote.main import create_app  # noqa: E402
+
+def wait_until_read(client, photo_id, seconds=90):
+    import time
+    for _ in range(seconds * 4):
+        photo = client.get(f"/api/photos/{photo_id}").json()
+        if photo["status"] != "reading":
+            return photo
+        time.sleep(0.25)
+    raise AssertionError("photo still being read")
+
+
+def test_inbox_photos_are_read_in_the_background_and_kept_until_sorted(logged_in, settings, monkeypatch):
+    import sqlite3
+
+    from marginote import main
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "La Science et l’hypothèse", "fetch_cover": False}).json()
+
+    with main.OCR_SLOT:   # the reader waits: the photo stays "reading"
+        sent = logged_in.post("/api/photos", params={"later": "true", "book_id": book["id"]},
+                              files={"file": ("p.jpg", make_page("168"), "image/jpeg")}).json()
+        assert sent["status"] == "reading" and sent["queued"] and sent["words"] == []
+        r = logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": sent["id"], "text": "x"})
+        assert r.status_code == 409                       # cannot be used before it is read
+    photo = wait_until_read(logged_in, sent["id"])
+    assert photo["status"] == "ready" and photo["detected_page"] == "168" and len(photo["words"]) > 40
+
+    inbox = logged_in.get("/api/photos").json()
+    assert [(p["id"], p["book_title"], p["entry_count"]) for p in inbox] == [(sent["id"], book["title"], 0)]
+    thumb = logged_in.get(inbox[0]["thumb_url"])
+    assert thumb.headers["content-type"] == "image/webp" and Image.open(io.BytesIO(thumb.content)).width <= 320
+
+    # a day later it is still there: the inbox is never cleaned up
+    conn = sqlite3.connect(settings.db_path)
+    conn.execute("UPDATE photos SET created_at = '2020-01-01T00:00:00Z'")
+    conn.commit(); conn.close()
+    with TestClient(create_app(settings)):
+        pass
+    assert logged_in.get(f"/api/photos/{sent['id']}").status_code == 200
+
+    # sorting: a quote from it, then out of the inbox; it stays because a quote uses it
+    first = next(w["i"] for w in photo["words"] if w["text"] == "On")
+    q = logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": sent["id"], "word_start": first, "word_end": first + 4})
+    assert q.status_code == 201
+    assert logged_in.get("/api/photos").json()[0]["entry_count"] == 1
+    assert logged_in.delete(f"/api/photos/{sent['id']}").status_code == 409
+    assert logged_in.patch(f"/api/photos/{sent['id']}", json={"queued": False}).json()["queued"] is False
+    assert logged_in.get("/api/photos").json() == []
+
+    # a photo nobody needs is deleted, file included
+    other = logged_in.post("/api/photos", params={"later": "true"}, files={"file": ("o.jpg", make_page("9"), "image/jpeg")}).json()
+    wait_until_read(logged_in, other["id"])
+    assert logged_in.delete(f"/api/photos/{other['id']}").status_code == 200
+    assert not list(settings.photos_dir.rglob(f"{other['id']}*"))
+
+
+def test_photos_left_unread_by_a_restart_are_read_on_start(logged_in, settings):
+    import sqlite3
+
+    from marginote import main
+    with main.OCR_SLOT:
+        sent = logged_in.post("/api/photos", params={"later": "true"}, files={"file": ("p.jpg", make_page("27"), "image/jpeg")}).json()
+        # simulate a restart: a new app finds the photo still "reading" and queues it again
+        conn = sqlite3.connect(settings.db_path)
+        assert conn.execute("SELECT status FROM photos WHERE id = ?", (sent["id"],)).fetchone()[0] == "reading"
+        conn.close()
+        restarted = TestClient(create_app(settings))
+        restarted.__enter__()
+    try:
+        restarted.post("/api/login", json={"password": "correct horse"})
+        assert wait_until_read(restarted, sent["id"])["detected_page"] == "27"
+    finally:
+        restarted.__exit__(None, None, None)
+
+
+# ---------- backup status and download ----------
+
+def test_backup_status_and_everything_as_a_zip(logged_in, settings, monkeypatch):
+    import sqlite3
+    import zipfile
+
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "Walden", "fetch_cover": False}).json()
+    logged_in.post(f"/api/books/{book['id']}/cover", files={"file": ("c.png", cover_png(), "image/png")})
+    photo = logged_in.post("/api/photos", files={"file": ("p.jpg", make_page("90"), "image/jpeg")}).json()
+    logged_in.post("/api/entries", json={"book_id": book["id"], "photo_id": photo["id"], "text": "I went to the woods"})
+
+    assert logged_in.get("/api/backup/status").json()["copies"] == []
+    logged_in.post("/api/backup")
+    status = logged_in.get("/api/backup/status").json()
+    assert len(status["copies"]) == 1 and status["copies"][0]["bytes"] > 0 and status["kept"] == 14
+    assert status["photos"]["count"] == 1 and status["covers"]["count"] == 1 and status["database_bytes"] > 0
+    assert status["next"] > status["copies"][0]["written_at"][:10]
+
+    r = logged_in.get("/api/backup/download")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    assert "attachment" in r.headers["content-disposition"]
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    names = z.namelist()
+    assert names[0] == "marginote.db" and any(n.startswith("photos/Walden") for n in names) and "covers/1.jpg" in names
+    restored = settings.data_dir / "restored.db"
+    restored.write_bytes(z.read("marginote.db"))
+    assert sqlite3.connect(restored).execute("SELECT title FROM books").fetchall() == [("Walden",)]
+    assert not list(settings.data_dir.glob(".download-*"))     # the temporary copy is gone

@@ -12,6 +12,12 @@ import pytesseract
 from PIL import Image, ImageFilter, ImageMath, ImageOps
 
 from . import dewarp
+from .lookup import clean_isbn, isbn13
+
+try:  # reads the barcode on a back cover (the ISBN as an EAN-13)
+    import zxingcpp
+except ImportError:  # pragma: no cover
+    zxingcpp = None
 
 try:  # iPhone photos are often HEIC
     from pillow_heif import register_heif_opener
@@ -312,6 +318,46 @@ def find_page_number(gray: Image.Image, words: list[Word], langs: str) -> str | 
                 elif _ROMAN.match(token) and len(token) <= 7 and conf >= 75:
                     found.append((conf - 10, token.lower()))
     return max(found)[1] if found else None
+
+
+# ---------- ISBN from a photo of the back cover ----------
+
+_ISBN_AFTER_LABEL = re.compile(r"ISBN(?:-?1[03])?[\s:]*([0-9Xx][0-9Xx\s\u2010-\u2013-]{8,20})", re.I)
+_EAN_LIKE = re.compile(r"97[89][\d\s\u2010-\u2013-]{10,16}")
+
+
+def isbns_in_text(text: str) -> list[str]:
+    """Valid ISBNs written in a text ('ISBN 978-2-07-036002-4', 'ISBN 2-07-036002-4', a bare 978… number),
+    as ISBN-13, in the order found."""
+    found: list[str] = []
+    for raw in [m.group(1) for m in _ISBN_AFTER_LABEL.finditer(text)] + [m.group(0) for m in _EAN_LIKE.finditer(text)]:
+        digits = re.sub(r"[^0-9Xx]", "", raw).upper()
+        for size in (13, 10):
+            code = clean_isbn(digits[:size]) if len(digits) >= size else None
+            if code:
+                code = isbn13(code)
+                if code not in found:
+                    found.append(code)
+                break
+    return found
+
+
+def find_isbn(img: Image.Image, langs: str) -> tuple[str | None, str]:
+    """The ISBN on a photo of a back cover: from the barcode if it can be read, else from the printed number.
+
+    Returns (ISBN-13 or None, "barcode" | "text" | "").
+    """
+    if zxingcpp is not None:
+        for result in zxingcpp.read_barcodes(img, formats=zxingcpp.BarcodeFormat.EAN13):
+            code = clean_isbn(result.text)
+            if code and code.startswith(("978", "979")):
+                return code, "barcode"
+    # no clipping here (cutoff=0): a back cover is mostly empty, and clipping the darkest 1% of pixels would
+    # erase its few lines of text
+    gray = ImageOps.autocontrast(even_lighting(ImageOps.grayscale(img)), cutoff=0)
+    text = pytesseract.image_to_string(gray, lang=langs, config="--oem 1 --psm 11")
+    found = isbns_in_text(text)
+    return (found[0], "text") if found else (None, "")
 
 
 # ---------- passage selection ----------

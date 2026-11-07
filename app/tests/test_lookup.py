@@ -76,3 +76,59 @@ def test_nothing_found_is_logged_without_the_book(monkeypatch, caplog):
     message = caplog.records[-1].getMessage()
     assert message.startswith("No cover found. Tried: open library isbn: 404; google isbn: 404")
     assert "Camus" not in message and "2070360024" not in message
+
+
+BNF_SAMPLE = """<?xml version="1.0" encoding="UTF-8"?>
+<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+  <srw:version>1.2</srw:version><srw:numberOfRecords>1</srw:numberOfRecords>
+  <srw:records><srw:record><srw:recordSchema>dc</srw:recordSchema><srw:recordData>
+    <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <dc:identifier>ISBN 9782080712350</dc:identifier>
+      <dc:title>La science et l'hypothèse : essai / Henri Poincaré ; préface de Jules Vuillemin</dc:title>
+      <dc:creator>Poincaré, Henri (1854-1912). Auteur du texte</dc:creator>
+      <dc:contributor>Vuillemin, Jules (1920-2001). Préfacier</dc:contributor>
+      <dc:contributor>Dupont, Marie. Traducteur</dc:contributor>
+      <dc:publisher>Flammarion (Paris)</dc:publisher>
+      <dc:date>DL 1968</dc:date>
+      <dc:language>fre</dc:language>
+    </oai_dc:dc>
+  </srw:recordData></srw:record></srw:records>
+</srw:searchRetrieveResponse>"""
+
+
+def test_bnf_record_read_as_book_details():
+    assert lookup.parse_bnf(BNF_SAMPLE) == {
+        "title": "La science et l'hypothèse", "subtitle": "essai", "authors": "Henri Poincaré",
+        "translator": "Marie Dupont", "publisher": "Flammarion", "year": 1968, "language": "fr",
+    }
+    assert lookup.parse_bnf("<srw:searchRetrieveResponse xmlns:srw='x'><srw:numberOfRecords>0</srw:numberOfRecords>"
+                            "</srw:searchRetrieveResponse>") == {}
+    assert lookup.parse_bnf("not xml") == {}
+
+
+def test_bnf_is_asked_and_first_for_french_books(monkeypatch):
+    asked = fake_internet(monkeypatch, lambda request: (
+        httpx.Response(200, text=BNF_SAMPLE) if request.url.host == "catalogue.bnf.fr"
+        else httpx.Response(200, json={"ISBN:9782080712350": {"title": "La Science Et L'Hypothese", "publish_date": "1968"}})
+        if request.url.host == "openlibrary.org" else httpx.Response(200, json={})))
+    found = lookup.lookup_isbn("9782080712350")
+    assert found["title"] == "La science et l'hypothèse" and found["source"] == "BnF"
+    assert found["translator"] == "Marie Dupont"
+    bnf = next(a for a in asked if a.startswith("catalogue.bnf.fr"))
+    assert bnf == "catalogue.bnf.fr/api/SRU"
+
+
+def test_unreachable_services_are_told_apart_from_unknown_books(monkeypatch, caplog):
+    def down(request):
+        raise httpx.ConnectError("no route")
+    fake_internet(monkeypatch, down)
+    try:
+        lookup.lookup_isbn("9782070360024")
+        raise AssertionError("expected LookupUnavailable")
+    except lookup.LookupUnavailable:
+        pass
+    fake_internet(monkeypatch, lambda request: httpx.Response(200, json={}) if request.url.host != "catalogue.bnf.fr"
+                  else httpx.Response(200, text="<r/>"))
+    with caplog.at_level("INFO", logger="marginote"):
+        assert lookup.lookup_isbn("9782070360024") is None
+    assert "not known" in caplog.records[-1].getMessage() and "2070360024" not in caplog.records[-1].getMessage()

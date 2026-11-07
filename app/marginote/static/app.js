@@ -69,8 +69,18 @@ function fullDate(iso) {
   const d = new Date(iso);
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
+function dateTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${fullDate(iso)}, ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+function size(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
 const fold = (s) => (s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
-const WORDS = { entry: 'entries' };
+const WORDS = { entry: 'entries', copy: 'copies' };
 const plural = (n, word) => `${n} ${n === 1 ? word : WORDS[word] || word + 's'}`;
 const isWide = () => window.matchMedia('(min-width: 960px)').matches;
 const coarse = () => window.matchMedia('(pointer: coarse)').matches;
@@ -560,7 +570,7 @@ async function viewLogin() {
 }
 
 async function viewBooks({ params }) {
-  const books = await store.getBooks(true);   // fresh each time: a cover found in the background shows up
+  const [books, inbox] = await Promise.all([store.getBooks(true), api('/api/photos')]);   // fresh: covers found later show up
   let sort = prefs.get('booksSort', 'last_entry');
   let subject = prefs.get('booksSubject', '');
   const subjects = [...new Set(books.map((b) => b.subject).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -626,6 +636,8 @@ async function viewBooks({ params }) {
         h('div', { style: { display: 'flex' } },
           h('a', { class: 'icon-btn narrow-only', href: '#/settings', 'aria-label': 'Settings' }, icon('more', 22)),
           h('a', { class: 'icon-btn', href: '#/book/new', 'aria-label': 'Add a book' }, icon('plus', 22)))),
+      inbox.length ? h('a', { class: 'filter', href: '#/inbox', style: { color: 'var(--ink)', alignSelf: 'flex-start' } },
+        `inbox · ${plural(inbox.length, 'page')} to sort`) : null,
       h('label', { class: 'search' }, icon('search', 16), q),
       books.length ? h('div', { class: 'tools half' }, sortSel, subjectSel) : null),
     list, found);
@@ -990,9 +1002,15 @@ async function viewCapture({ params }) {
       bare: true,
     };
   }
-  const wanted = Number(params.get('book'));
-  let book = books.find((b) => b.id === wanted) || books.find((b) => b.id === currentBookId(books));
+  const fromInbox = params.get('photo');
   let photo = null;
+  if (fromInbox) {
+    photo = await api(`/api/photos/${encodeURIComponent(fromInbox)}`);
+    if (photo.status !== 'ready') { toast('This page is still being read'); go('inbox'); return null; }
+  }
+  const wanted = Number(params.get('book')) || photo?.book_id;
+  let book = books.find((b) => b.id === wanted) || books.find((b) => b.id === currentBookId(books));
+  const waiting = fromInbox ? [] : await api('/api/photos').catch(() => []);
   let range = null;
   let selector = null;
   const root = h('div', { class: 'capture', style: { display: 'flex', flexDirection: 'column', minHeight: '100dvh' } });
@@ -1020,7 +1038,53 @@ async function viewCapture({ params }) {
           ? [h('label', { class: 'btn primary big file-btn' }, icon('camera', 20), 'Take a photo', fileInput(true)),
             h('label', { class: 'btn big file-btn' }, icon('image', 20), 'Choose a photo', fileInput(false))]
           : [h('label', { class: 'btn primary big file-btn' }, icon('image', 20), 'Choose a photo', fileInput(false)), drop],
-        h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Type it')));
+        h('button', { class: 'btn big', type: 'button', onclick: stepLater }, icon('image', 20), 'Several pages, sort later'),
+        h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Type it'),
+        waiting.length ? h('a', { class: 'filter', href: '#/inbox', style: { color: 'var(--ink)' } }, `inbox · ${plural(waiting.length, 'page')} to sort`) : null));
+  }
+
+  function stepLater() {
+    cleanup();
+    const sent = h('div', { class: 'sent' });
+    let count = 0;
+    const counter = h('p', { class: 'note-line' });
+    const queue = [];
+    let busy = false;
+    async function pump() {
+      if (busy) return;
+      busy = true;
+      while (queue.length) {
+        const { file, row } = queue.shift();
+        const state = row.querySelector('.state');
+        try {
+          const form = new FormData();
+          form.append('file', await shrinkPhoto(file));
+          await api(`/api/photos?later=true&book_id=${book.id}`, { method: 'POST', form });
+          state.textContent = 'sent';
+          count += 1;
+          counter.textContent = `${plural(count, 'page')} sent. They are read on the server; sort them from the inbox.`;
+        } catch (err) { state.textContent = err.message; state.classList.add('bad'); }
+      }
+      busy = false;
+    }
+    const add = (files) => {
+      for (const file of files) {
+        const row = h('div', { class: 'sent-row' }, h('img', { src: URL.createObjectURL(file), alt: '' }), h('span', { class: 'state', text: 'sending…' }));
+        sent.prepend(row);
+        queue.push({ file, row });
+      }
+      pump();
+    };
+    const input = (camera) => h('input', { type: 'file', accept: 'image/*', multiple: !camera, capture: camera ? 'environment' : null,
+      'aria-label': camera ? 'Take a photo' : 'Choose photos', onchange: (ev) => { add([...ev.target.files]); ev.target.value = ''; } });
+    put(root,
+      bar(h('a', { class: 'link-btn', href: '#/inbox' }, 'Inbox'), book.title, h('a', { class: 'link-btn strong', href: `#/book/${book.id}` }, 'Done')),
+      h('div', { class: 'capture-start' },
+        h('div', { class: 'book-choice' }, cover(book, 'small'),
+          h('div', { class: 'main' }, h('div', { class: 't', text: book.title }), book.authors ? h('div', { class: 'muted', text: book.authors }) : null)),
+        coarse() ? h('label', { class: 'btn primary big file-btn' }, icon('camera', 20), 'Take a photo', input(true)) : null,
+        h('label', { class: `btn big file-btn${coarse() ? '' : ' primary'}` }, icon('image', 20), 'Choose photos', input(false)),
+        counter, sent));
   }
 
   function stepPickBook() {
@@ -1075,7 +1139,8 @@ async function viewCapture({ params }) {
       next.textContent = r.phase === 'none' ? 'Next' : `Next · ${plural(r.end - r.start + 1, 'word')}`;
     } });
     put(root,
-      bar(h('button', { class: 'link-btn', type: 'button', onclick: () => stepStart() }, icon('back', 20), 'Retake'), book.title,
+      bar(fromInbox ? h('a', { class: 'link-btn', href: '#/inbox' }, icon('back', 20), 'Inbox')
+        : h('button', { class: 'link-btn', type: 'button', onclick: () => stepStart() }, icon('back', 20), 'Retake'), book.title,
         h('button', { class: 'link-btn', type: 'button', onclick: () => stepDetails(null, true) }, 'Type')),
       selector.el,
       h('div', { class: 'sel-sheet' }, preview, nudgeBar(selector), next));
@@ -1091,21 +1156,29 @@ async function viewCapture({ params }) {
     const page = h('input', { class: 'input', id: 'c-page', value: photo?.detected_page || '', inputmode: 'text', style: { width: '90px' } });
     const note = h('textarea', { class: 'textarea', rows: 2, id: 'c-note' });
     const tagsIn = tagInput([], tags);
+    const bookSel = h('select', { class: 'select', id: 'c-book' }, books.map((b) => h('option', { value: String(b.id) }, b.title)));
+    bookSel.value = String(book.id);
     const textLabel = h('span', { text: 'passage' });
     const kindSeg = kindSwitch(() => kind, (k) => { kind = k; }, () => { textLabel.textContent = kind === 'quote' ? 'passage' : 'comment'; });
-    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, `Save to ${book.title}`);
+    const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, 'Save');
     const save = async (ev) => {
       ev.preventDefault();
       if (!text.value.trim()) { text.focus(); toast('The text is empty'); return; }
       saveBtn.disabled = true;
       try {
-        const body = { book_id: book.id, kind, text: text.value, page: page.value, note: note.value, tags: tagsIn.value };
+        const bookId = Number(bookSel.value);
+        const body = { book_id: bookId, kind, text: text.value, page: page.value, note: note.value, tags: tagsIn.value };
         if (fromPhoto) Object.assign(body, { photo_id: photo.id, word_start: range.start, word_end: range.end });
         const e = await api('/api/entries', { method: 'POST', body });
-        prefs.set('captureBook', book.id);
+        prefs.set('captureBook', bookId);
         store.changed();
-        go(`book/${book.id}`, { fresh: e.id });
-        toast('Saved', fromPhoto ? { label: 'Another from this page', run: () => go('capture', { again: 1 }) } : null);
+        if (fromInbox) {
+          go('inbox');
+          toast('Saved', { label: 'Another from this page', run: () => go('capture', { photo: photo.id }) });
+        } else {
+          go(`book/${bookId}`, { fresh: e.id });
+          toast('Saved', fromPhoto ? { label: 'Another from this page', run: () => go('capture', { again: 1 }) } : null);
+        }
       } catch (err) { saveBtn.disabled = false; toast(err.message); }
     };
     put(root, h('form', { onsubmit: save, style: { display: 'flex', flexDirection: 'column', flex: 1 } },
@@ -1114,14 +1187,18 @@ async function viewCapture({ params }) {
       h('div', { class: 'details', style: { flex: 1 } },
         fromPhoto ? null : kindSeg,
         h('label', { class: 'field', for: 'c-text' }, textLabel, text),
-        h('label', { class: 'field', for: 'c-page' }, h('span', { text: 'page' }), page),
+        h('div', { class: 'two' },
+          h('label', { class: 'field', for: 'c-page' }, h('span', { text: 'page' }), page),
+          h('label', { class: 'field', for: 'c-book', style: { flex: 1, minWidth: 0 } }, h('span', { text: 'book' }), bookSel)),
         h('label', { class: 'field', for: 'c-note' }, h('span', { text: 'note' }), note),
         tagsIn.el),
       h('div', { class: 'save-bar' }, saveBtn)));
     if (!fromPhoto) setTimeout(() => text.focus(), 50);
   }
 
-  if (params.get('again') && capture.last) {
+  if (fromInbox) {
+    stepSelect();
+  } else if (params.get('again') && capture.last) {
     photo = capture.last.photo;
     book = books.find((b) => b.id === capture.last.bookId) || book;
     stepSelect();
@@ -1131,6 +1208,47 @@ async function viewCapture({ params }) {
   return { el: root, bare: true, cleanup };
 }
 
+async function viewInbox() {
+  const photos = await api('/api/photos');
+  const done = async (p) => {
+    if (p.entry_count) {
+      await api(`/api/photos/${p.id}`, { method: 'PATCH', body: { queued: false } }).catch((err) => toast(err.message));
+      render();
+      return;
+    }
+    const ok = await confirmDialog({ title: 'Remove this page?', text: 'No quote was saved from it. The photo is deleted.',
+      choices: [{ label: 'Remove the photo', value: true, danger: true }] });
+    if (!ok) return;
+    await api(`/api/photos/${p.id}`, { method: 'DELETE' }).catch((err) => toast(err.message));
+    render();
+  };
+  const reading = photos.some((p) => p.status === 'reading');
+  if (reading) {   // check again until every page is read
+    const mark = location.hash;
+    setTimeout(() => { if (location.hash === mark) render(); }, 3000);
+  }
+  const el = h('div', {},
+    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Inbox', h('span', { class: 'count', text: photos.length })))),
+    photos.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'pages to sort' })),
+      photos.map((p) => h('div', { class: 'inbox-row' },
+        h('img', { class: 'thumb', src: p.thumb_url, alt: '', loading: 'lazy' }),
+        h('div', { class: 'main' },
+          h('span', { class: 't', text: p.book_title || 'No book' }),
+          h('span', { class: 'a' }, [
+            p.detected_page ? `p. ${p.detected_page}` : null,
+            p.status === 'reading' ? h('i', { text: 'being read…' }) : null,
+            p.status === 'failed' ? h('i', { class: 'bad', text: 'could not be read' }) : null,
+            p.entry_count ? plural(p.entry_count, 'quote') + ' saved' : null,
+            fullDate(p.created_at),
+          ].filter(Boolean).flatMap((x, k) => (k ? [' · ', x] : [x]))),
+          h('div', { class: 'actions' },
+            p.status === 'ready' ? h('a', { class: 'btn primary small', href: `#/capture?photo=${p.id}` }, 'Sort') : null,
+            h('button', { class: 'btn small', type: 'button', onclick: () => done(p) }, p.entry_count ? 'Done' : 'Remove…'))))),
+      h('div', { class: 'list-end' })]
+      : h('div', { class: 'empty' }, 'Nothing to sort.', h('a', { class: 'btn', href: '#/capture' }, 'Capture')));
+  return { el, nav: 'inbox' };
+}
+
 async function viewBookForm({ args: [id], params }) {
   const editing = id != null;
   const [book, books] = await Promise.all([editing ? api(`/api/books/${id}`) : {}, store.getBooks()]);
@@ -1138,7 +1256,7 @@ async function viewBookForm({ args: [id], params }) {
     const input = h('input', { class: 'input', id: `b-${key}`, value: book[key] ?? '', ...attrs });
     return { input, el: h('label', { class: 'field', for: `b-${key}` }, h('span', { text: label }), input) };
   };
-  const isbn = field('isbn', 'ISBN', { inputmode: 'numeric', autocomplete: 'off' });
+  const isbn = field('isbn', 'isbn', { inputmode: 'numeric', autocomplete: 'off' });
   const title = field('title', 'title', { required: true, autocapitalize: 'sentences' });
   const subtitle = field('subtitle', 'subtitle');
   const authors = field('authors', 'author(s)');
@@ -1153,15 +1271,31 @@ async function viewBookForm({ args: [id], params }) {
   language.value = ['fr', 'en', ''].includes(book.language || '') ? (book.language || '') : 'other';
   const msg = h('div', { class: 'note-line', role: 'status' });
 
-  const lookupBtn = h('button', { class: 'btn small', type: 'button', onclick: async () => {
-    msg.textContent = 'Looking up…';
+  const lookUp = async (prefix = '') => {
+    msg.textContent = `${prefix}Looking up…`;
     try {
       const found = await api(`/api/lookup/isbn/${encodeURIComponent(isbn.input.value)}`);
-      for (const [k, f] of Object.entries({ title, subtitle, authors, publisher, year })) if (found[k]) f.input.value = found[k];
+      for (const [k, f] of Object.entries({ title, subtitle, authors, publisher, year, translator })) if (found[k]) f.input.value = found[k];
       if (found.language) language.value = ['fr', 'en'].includes(found.language) ? found.language : 'other';
-      msg.textContent = `Found on ${found.source}.`;
-    } catch (err) { msg.textContent = err.message; }
-  } }, 'Look up');
+      msg.textContent = `${prefix}Found on ${found.source}.`;
+    } catch (err) { msg.textContent = prefix + err.message; }
+  };
+  const lookupBtn = h('button', { class: 'btn small', type: 'button', onclick: () => lookUp() }, 'Look up');
+  const backCover = h('input', { type: 'file', accept: 'image/*', capture: 'environment', 'aria-label': 'Photo of the back cover',
+    onchange: async (ev) => {
+      const f = ev.target.files[0];
+      ev.target.value = '';
+      if (!f) return;
+      msg.textContent = 'Reading the barcode…';
+      try {
+        const form = new FormData();
+        form.append('file', await shrinkPhoto(f));
+        const r = await api('/api/lookup/isbn-photo', { method: 'POST', form });
+        isbn.input.value = r.isbn;
+        await lookUp(r.found_by === 'barcode' ? 'Barcode read. ' : 'ISBN read. ');
+      } catch (err) { msg.textContent = err.message; }
+    } });
+  const scanBtn = h('label', { class: 'btn small file-btn' }, icon('camera', 16), 'Back cover', backCover);
 
   const payload = () => {
     const y = year.input.value.trim();
@@ -1229,7 +1363,7 @@ async function viewBookForm({ args: [id], params }) {
       h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
     h('div', { class: 'details' },
       coverBox,
-      h('div', { class: 'two' }, h('div', { style: { flex: 1, minWidth: 0 } }, isbn.el), lookupBtn),
+      h('div', { class: 'two' }, h('div', { style: { flex: 1, minWidth: 0 } }, isbn.el), lookupBtn, scanBtn),
       title.el, subtitle.el, authors.el, subject.el,
       h('div', { class: 'two' }, h('div', { style: { flex: 1 } }, publisher.el), h('div', { style: { width: '90px' } }, year.el)),
       h('div', { class: 'two' }, h('div', { style: { flex: 1 } }, edition.el), h('div', { style: { flex: 1 } }, translator.el)),
@@ -1241,30 +1375,44 @@ async function viewBookForm({ args: [id], params }) {
 }
 
 async function viewSettings() {
-  const health = await api('/api/health');
+  const [health, backups] = await Promise.all([api('/api/health'), api('/api/backup/status')]);
   const backupMsg = h('span', { class: 'note-line', role: 'status' });
-  const rows = [
-    ['Version', health.version],
-    ['Text recognition', health.tesseract ? `Tesseract ${health.tesseract} (${health.ocr_languages.join(', ')})` : 'missing'],
-    ['Page straightening', health.straighten_pages ? 'on' : 'off'],
-    ['Online book lookups', health.lookups_enabled ? 'on' : 'off'],
-  ];
+  const last = backups.copies[0];
+  const table = (rows) => h('table', { class: 'grid settings' }, h('tbody', {}, rows.map(([k, v]) => h('tr', {}, h('td', { text: k }), h('td', { class: 'm', text: v })))));
   const el = h('div', {},
     h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Settings'))),
     h('div', { class: 'pad' },
-      h('table', { class: 'grid', style: { cursor: 'default' } }, h('tbody', {}, rows.map(([k, v]) => h('tr', { style: { cursor: 'default' } },
-        h('td', { text: k }), h('td', { class: 'm', text: v }))))),
+      h('h2', { class: 'section-title', text: 'Backups' }),
+      table([
+        ['Last copy', last ? dateTime(last.written_at) : 'none yet'],
+        ['Copies kept', `${backups.copies.length} of ${backups.kept}`],
+        ['Next copy', dateTime(backups.next)],
+        ['Database', size(backups.database_bytes)],
+        ['Photos', `${backups.photos.count} · ${size(backups.photos.bytes)}`],
+        ['Covers', `${backups.covers.count} · ${size(backups.covers.bytes)}`],
+      ]),
+      h('p', { class: 'note-line', text: 'Copies of the database are kept in data/backups. Photos and covers are files: back up the whole data folder from the NAS.' }),
       h('div', { class: 'row-btns' },
         h('button', { class: 'btn small', type: 'button', onclick: async () => {
-          try { const r = await api('/api/backup', { method: 'POST' }); backupMsg.textContent = `Saved ${r.file}`; } catch (err) { backupMsg.textContent = err.message; }
+          try { await api('/api/backup', { method: 'POST' }); toast('Copy made'); render(); } catch (err) { backupMsg.textContent = err.message; }
         } }, 'Back up now'),
+        h('a', { class: 'btn small', href: '/api/backup/download', download: '' }, 'Download everything (.zip)')),
+      backupMsg,
+      h('h2', { class: 'section-title', text: 'App' }),
+      table([
+        ['Version', health.version],
+        ['Text recognition', health.tesseract ? `Tesseract ${health.tesseract} (${health.ocr_languages.join(', ')})` : 'missing'],
+        ['Page straightening', health.straighten_pages ? 'on' : 'off'],
+        ['Barcode reader', health.barcode_reader ? 'on' : 'off'],
+        ['Online book lookups', health.lookups_enabled ? 'on' : 'off'],
+      ]),
+      h('div', { class: 'row-btns' },
         h('a', { class: 'btn small', href: '/docs', target: '_blank', rel: 'noopener' }, 'API'),
         h('button', { class: 'btn small', type: 'button', onclick: async () => {
           await api('/api/logout', { method: 'POST' }).catch(() => null);
           store.changed();
           go('login');
-        } }, 'Log out')),
-      backupMsg));
+        } }, 'Log out'))));
   return { el, nav: 'settings' };
 }
 
@@ -1276,7 +1424,7 @@ function buildShell() {
     h('a', { href: '#/', class: 'brand' }, 'Marginote'),
     h('a', { class: 'btn primary', href: '#/capture' }, '+ Capture'),
     h('nav', { 'aria-label': 'Main' }, link('books', '#/', 'Books'), link('quotes', '#/quotes', 'Quotes'), link('tags', '#/tags', 'Tags'),
-      link('settings', '#/settings', 'Settings')));
+      link('inbox', '#/inbox', 'Inbox'), link('settings', '#/settings', 'Settings')));
   const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Main' },
     link('books', '#/', 'Books'), link('quotes', '#/quotes', 'Quotes'), link('tags', '#/tags', 'Tags'),
     h('span', { class: 'tab-capture' }, h('a', { class: 'btn primary', href: '#/capture', style: { minHeight: '38px', padding: '0 12px', fontSize: '16px' } }, '+ Capture')));
@@ -1297,6 +1445,7 @@ const ROUTES = [
   [/^entry\/(\d+)\/photo$/, viewEntryPhoto],
   [/^capture$/, viewCapture],
   [/^settings$/, viewSettings],
+  [/^inbox$/, viewInbox],
 ];
 
 function go(path, params) {

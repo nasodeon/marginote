@@ -1,4 +1,5 @@
-"""Book details and covers from Open Library and Google Books (covers also from Amazon's image server).
+"""Book details from Open Library, Google Books and the BnF catalogue (Bibliothèque nationale de France);
+covers from Open Library, Google Books and Amazon's image server.
 
 Only an ISBN, or a title and author, leaves the server. Turn lookups off with LOOKUPS_ENABLED=false.
 """
@@ -7,6 +8,7 @@ import io
 import logging
 import re
 import unicodedata
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -42,6 +44,10 @@ def _client() -> httpx.Client:
     return httpx.Client(headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
 
 
+class LookupUnavailable(Exception):
+    """None of the book services could be reached."""
+
+
 def _open_library(isbn: str) -> dict:
     try:
         with _client() as client:
@@ -50,10 +56,12 @@ def _open_library(isbn: str) -> dict:
                 params={"bibkeys": f"ISBN:{isbn}", "format": "json", "jscmd": "data"},
             )
             data = r.json().get(f"ISBN:{isbn}") if r.status_code == 200 else None
-    except (httpx.HTTPError, ValueError):
-        return {}
+    except (httpx.HTTPError, ValueError) as err:
+        return {"_note": f"error {type(err).__name__}"}
+    if r.status_code != 200:
+        return {"_note": f"error {r.status_code}"}
     if not data:
-        return {}
+        return {"_note": "not known"}
     return {
         "title": data.get("title"),
         "subtitle": data.get("subtitle"),
@@ -68,10 +76,12 @@ def _google_books(isbn: str) -> dict:
         with _client() as client:
             r = client.get("https://www.googleapis.com/books/v1/volumes", params={"q": f"isbn:{isbn}"})
             items = r.json().get("items") if r.status_code == 200 else None
-    except (httpx.HTTPError, ValueError):
-        return {}
+    except (httpx.HTTPError, ValueError) as err:
+        return {"_note": f"error {type(err).__name__}"}
+    if r.status_code != 200:
+        return {"_note": f"error {r.status_code}"}
     if not items:
-        return {}
+        return {"_note": "not known"}
     info = items[0].get("volumeInfo", {})
     return {
         "title": info.get("title"),
@@ -83,24 +93,113 @@ def _google_books(isbn: str) -> dict:
     }
 
 
+_LANGUAGES = {"fre": "fr", "fra": "fr", "eng": "en", "ger": "de", "deu": "de", "spa": "es", "ita": "it"}
+
+
+def _bnf_person(text: str) -> tuple[str, str]:
+    """'Camus, Albert (1913-1960). Auteur du texte' -> ('Albert Camus', 'Auteur du texte')."""
+    m = re.match(r"^(?P<name>.+?)(?:\s*\((?P<dates>[^)]*)\))?(?:\.\s*(?P<role>[^.]+))?\.?$", text.strip())
+    name, role = (m.group("name"), m.group("role") or "") if m else (text, "")
+    if name.count(",") == 1:
+        last, first = (part.strip() for part in name.split(","))
+        name = f"{first} {last}"
+    return name.strip(), role.strip()
+
+
+def parse_bnf(xml_text: str) -> dict:
+    """The first record of a BnF SRU answer in Dublin Core, as book details."""
+    try:
+        root = ET.fromstring(xml_text.encode("utf-8"))
+    except ET.ParseError:
+        return {}
+    local = lambda tag: tag.rsplit("}", 1)[-1]  # noqa: E731
+    record = next((el for el in root.iter() if local(el.tag) == "dc"), None)
+    if record is None:
+        return {}
+    fields: dict[str, list[str]] = {}
+    for el in record:
+        if el.text and el.text.strip():
+            fields.setdefault(local(el.tag), []).append(el.text.strip())
+    first = lambda key: (fields.get(key) or [None])[0]  # noqa: E731
+    if not first("title"):
+        return {}
+    main = re.sub(r"\s*\[[^\]]*\]", "", first("title").split(" / ")[0]).strip()
+    title, _, subtitle = main.partition(" : ")
+    authors, translators = [], []
+    for raw in fields.get("creator", []) + fields.get("contributor", []):
+        name, role = _bnf_person(raw)
+        if "tradu" in role.lower():
+            translators.append(name)
+        elif not role or "auteur" in role.lower():
+            authors.append(name)
+    publisher = first("publisher")
+    language = first("language")
+    return {
+        "title": title.strip(),
+        "subtitle": subtitle.strip() or None,
+        "authors": ", ".join(dict.fromkeys(authors)) or None,
+        "translator": ", ".join(dict.fromkeys(translators)) or None,
+        "publisher": re.sub(r"\s*\([^)]*\)\s*$", "", publisher).strip() if publisher else None,
+        "year": _year(first("date")),
+        "language": _LANGUAGES.get(language, language) if language else None,
+    }
+
+
+def _bnf(isbn: str) -> dict:
+    """The Bibliothèque nationale de France catalogue: knows nearly every book published in France."""
+    try:
+        with _client() as client:
+            r = client.get("https://catalogue.bnf.fr/api/SRU", params={
+                "version": "1.2", "operation": "searchRetrieve", "query": f'bib.fuzzyIsbn all "{isbn}"',
+                "recordSchema": "dublincore", "maximumRecords": "1",
+            })
+    except httpx.HTTPError as err:
+        return {"_note": f"error {type(err).__name__}"}
+    if r.status_code != 200:
+        return {"_note": f"error {r.status_code}"}
+    return parse_bnf(r.text) or {"_note": "not known"}
+
+
 def lookup_isbn(isbn: str) -> dict | None:
     """Return title, authors, publisher, year, language for an ISBN, or None if nobody knows it.
 
-    Both sources are asked at the same time, so the wait is the slower of the two, not their sum.
+    The three sources are asked at the same time, so the wait is the slowest of them, not their sum.
+    For a French book (ISBN 978-2… or 979-10…) the BnF comes first, otherwise Open Library; the others fill gaps.
+    Raises LookupUnavailable if none of them could be reached.
     """
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        ol_future = pool.submit(_open_library, isbn)
-        google_future = pool.submit(_google_books, isbn)
-        ol, google = ol_future.result(), google_future.result()
-    result = {k: v for k, v in ol.items() if v}
-    for key, value in google.items():
-        if value and not result.get(key):
-            result[key] = value
+    sources = {"Open Library": _open_library, "Google Books": _google_books, "BnF": _bnf}
+    with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+        futures = {name: pool.submit(fn, isbn) for name, fn in sources.items()}
+        answers = {name: f.result() for name, f in futures.items()}
+    notes = {name: answer.pop("_note", "found") for name, answer in answers.items()}
+    french = isbn.startswith(("9782", "97910")) or (len(isbn) == 10 and isbn.startswith("2"))
+    order = ["BnF", "Open Library", "Google Books"] if french else ["Open Library", "Google Books", "BnF"]
+    result: dict = {}
+    source = None
+    for name in order:
+        for key, value in answers[name].items():
+            if value and not result.get(key):
+                result[key] = value
+                if key == "title":
+                    source = name
     if not result.get("title"):
+        summary = "; ".join(f"{name}: {note}" for name, note in notes.items())
+        log.info("ISBN lookup found nothing. Asked: %s", summary)   # no ISBN in the log
+        if all(note.startswith("error") for note in notes.values()):
+            raise LookupUnavailable(summary)
         return None
-    result["source"] = "Open Library" if ol.get("title") else "Google Books"
+    result["source"] = source
     result["isbn"] = isbn
     return result
+
+
+def isbn13(isbn: str) -> str:
+    """The 13-digit form of an ISBN-10 (prefix 978)."""
+    if len(isbn) != 10:
+        return isbn
+    core = "978" + isbn[:9]
+    total = sum(int(d) * (1 if k % 2 == 0 else 3) for k, d in enumerate(core))
+    return core + str((10 - total % 10) % 10)
 
 
 def isbn10(isbn: str | None) -> str | None:
