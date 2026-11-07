@@ -1,4 +1,7 @@
-Copyright 2019 IBM Corp. All rights reserved. IBMPlexSans-Italic[wdth,wght].ttf: Copyright 2019 IBM Corp. All rights reserved.
+Computer Modern Unicode fonts (CMU Serif, CMU Typewriter Text)
+Converted by Andrey V. Panov from TeX fonts (https://cm-unicode.sourceforge.io/).
+Some glyphs are copied from Blue Sky fonts released by AMS.
+The files in this folder are subsets (Latin characters only) made for this app.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

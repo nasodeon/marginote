@@ -9,9 +9,10 @@ through your private Tailscale network.
 - `app/` — the app: FastAPI, SQLite full-text search, Tesseract text recognition (French and English)
   with shadow removal and straightening of pages that curve toward the spine (Leptonica), page-number
   detection, book details and covers from Open Library (Google Books as fallback)
-- `app/marginote/static/` — the screens, for phone and computer: books, a page per book (cover beside the
-  title), all quotes with filters, tags, and the capture flow (book → photo → passage → note and tags).
-  Plain JavaScript; fonts (IBM Plex, SIL Open Font License) are served by the app itself
+- `app/marginote/static/` — the screens, for phone and computer, set like a LaTeX document: books (with their
+  covers and subjects), a page per book (cover beside the title), all quotes and comments with filters, tags,
+  and the capture flow (book → photo → passage → note and tags). Plain JavaScript; the fonts (Computer Modern
+  Unicode, SIL Open Font License, Latin subset) are served by the app itself
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
@@ -69,7 +70,8 @@ Set in the compose file's `environment` list; all optional.
 ## Privacy
 
 - Nothing leaves your server except book lookups: an ISBN, or a title and author when a cover is
-  searched. Set `LOOKUPS_ENABLED=false` to turn them off.
+  searched. Details come from Open Library and Google Books; covers from those two and, by ISBN, from
+  Amazon's image server. Set `LOOKUPS_ENABLED=false` to turn all of them off.
 - The app listens only inside the Tailscale container: it is not reachable from your local network
   or the internet, only from your own tailnet devices.
 - Page photos are stored without any metadata (no location, camera or date). The test page also

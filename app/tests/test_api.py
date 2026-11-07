@@ -35,7 +35,7 @@ def test_app_page_files_and_docs_are_served(client):
     for path in re.findall(r'(?:href|src)="(/static/[^"?]+)', page.text):
         assert client.get(path).status_code == 200, path                      # every file the page names exists
     assert client.get("/static/app.js").headers["content-type"].startswith(("text/javascript", "application/javascript"))
-    assert client.get("/static/fonts/ibm-plex-sans-latin-400-normal.woff2").status_code == 200
+    assert client.get("/static/fonts/cmu-serif-regular.woff2").status_code == 200
     assert client.get("/static/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
     assert client.get("/docs").status_code == 200
 
@@ -107,10 +107,10 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     # book page: page order puts p. 158 before p. 168
     entries = logged_in.get(f"/api/books/{book['id']}/entries").json()
     assert [e["id"] for e in entries] == [thought["id"], quote["id"]]
-    assert logged_in.get(f"/api/books/{book['id']}/entries", params={"tag": "à creuser"}).json()[0]["kind"] == "thought"
+    assert logged_in.get(f"/api/books/{book['id']}/entries", params={"tag": "à creuser"}).json()[0]["kind"] == "comment"
 
     listed = logged_in.get("/api/books").json()[0]
-    assert listed["quote_count"] == 1 and listed["thought_count"] == 1
+    assert listed["quote_count"] == 1 and listed["comment_count"] == 1
 
     tags = {t["name"]: t["count"] for t in logged_in.get("/api/tags").json()}
     assert tags == {"méthode": 1, "épistémologie": 1, "à creuser": 1}
@@ -128,7 +128,7 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     # export
     md = logged_in.get(f"/api/books/{book['id']}/export.md")
     assert md.status_code == 200
-    assert "> On fait la science" in md.text and "#maison" in md.text and "**Thought (p. 158):**" in md.text
+    assert "> On fait la science" in md.text and "#maison" in md.text and "**Comment (p. 158):**" in md.text
 
     # delete
     assert logged_in.delete(f"/api/entries/{thought['id']}").status_code == 200
@@ -348,3 +348,55 @@ def test_many_requests_at_once_all_succeed(logged_in, monkeypatch):
         codes = list(pool.map(add, range(40)))
     assert codes == [201] * 40
     assert len(logged_in.get(f"/api/books/{book['id']}/entries").json()) == 40
+
+
+def test_books_have_a_subject(logged_in, monkeypatch):
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "Walden", "subject": "Nature writing"}).json()
+    assert book["subject"] == "Nature writing"
+    assert logged_in.patch(f"/api/books/{book['id']}", json={"subject": "Philosophy"}).json()["subject"] == "Philosophy"
+    assert logged_in.patch(f"/api/books/{book['id']}", json={"subject": ""}).json()["subject"] is None
+
+
+def test_comments_are_called_comments(logged_in, monkeypatch):
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "Essais", "fetch_cover": False}).json()
+    c = logged_in.post("/api/entries", json={"book_id": book["id"], "kind": "comment", "text": "À relire.", "page": "12"}).json()
+    q = logged_in.post("/api/entries", json={"book_id": book["id"], "text": "Que philosopher, c'est apprendre à mourir."}).json()
+    assert c["kind"] == "comment" and q["kind"] == "quote"
+    assert [e["id"] for e in logged_in.get("/api/entries", params={"kind": "comment"}).json()] == [c["id"]]
+    assert logged_in.get(f"/api/books/{book['id']}").json()["comment_count"] == 1
+    assert logged_in.patch(f"/api/entries/{q['id']}", json={"kind": "comment"}).json()["kind"] == "comment"
+    assert logged_in.patch(f"/api/entries/{q['id']}", json={"kind": None, "note": "x"}).json()["kind"] == "comment"
+    assert "**Comment (p. 12):** À relire." in logged_in.get(f"/api/books/{book['id']}/export.md").text
+
+
+def test_several_entries_deleted_at_once_and_book_kept(logged_in, monkeypatch):
+    monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+    book = logged_in.post("/api/books", json={"title": "Pensées", "fetch_cover": False}).json()
+    ids = [logged_in.post("/api/entries", json={"book_id": book["id"], "text": f"Pensée {n}", "tags": [f"t{n}"]}).json()["id"]
+           for n in range(3)]
+    r = logged_in.post("/api/entries/delete", json={"ids": ids[:2] + [999999]})
+    assert r.status_code == 200 and r.json()["deleted"] == ids[:2]
+    assert [e["id"] for e in logged_in.get(f"/api/books/{book['id']}/entries").json()] == [ids[2]]
+    assert [t["name"] for t in logged_in.get("/api/tags").json()] == ["t2"]       # tags left unused are removed
+    assert logged_in.get("/api/search", params={"q": "Pensée"}).json()[0]["id"] == ids[2]
+    assert logged_in.get(f"/api/books/{book['id']}").status_code == 200
+    assert logged_in.post("/api/entries/delete", json={"ids": []}).status_code == 422
+
+
+def test_database_from_an_older_version_gets_the_subject_column(settings):
+    import sqlite3
+
+    from marginote import db
+    settings.data_dir.mkdir(parents=True)
+    conn = sqlite3.connect(settings.db_path)
+    conn.executescript(db.SCHEMA_V1 + db.SCHEMA_V2)
+    conn.execute("PRAGMA user_version = 2")
+    conn.execute("INSERT INTO books (title, created_at, updated_at) VALUES ('Walden', 'x', 'x')")
+    conn.commit(); conn.close()
+    db.migrate(settings.db_path)
+    conn = sqlite3.connect(settings.db_path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    assert conn.execute("SELECT title, subject FROM books").fetchall() == [("Walden", None)]
+    conn.close()

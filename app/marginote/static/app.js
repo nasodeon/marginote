@@ -39,19 +39,17 @@ const ICONS = {
   back: 'm15 18-6-6 6-6',
   left: 'm14 17-5-5 5-5',
   right: 'm10 7 5 5-5 5',
-  close: 'M6 6l12 12M18 6 6 18',
   camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 10.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7z',
   image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 8.5h.01',
   pen: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   zoomIn: 'M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM20 20l-4.7-4.7M10.5 8v5M8 10.5h5',
   zoomOut: 'M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM20 20l-4.7-4.7M8 10.5h5',
-  check: 'm5 12 5 5 9-10',
 };
 function icon(name, size = 18) {
   const svg = document.createElementNS(SVG_NS, 'svg');
   for (const [k, v] of Object.entries({ width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
-    'stroke-width': name === 'more' ? 3 : 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) {
+    'stroke-width': name === 'more' ? 3 : 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) {
     svg.setAttribute(k, v);
   }
   const path = document.createElementNS(SVG_NS, 'path');
@@ -64,17 +62,19 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 function shortDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]}`;
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
 }
 function fullDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 const fold = (s) => (s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const WORDS = { entry: 'entries' };
+const plural = (n, word) => `${n} ${n === 1 ? word : WORDS[word] || word + 's'}`;
 const isWide = () => window.matchMedia('(min-width: 960px)').matches;
 const coarse = () => window.matchMedia('(pointer: coarse)').matches;
+const kindName = (kind) => (kind === 'quote' ? 'quote' : 'comment');
 
 const prefs = {
   get(key, fallback) {
@@ -132,25 +132,21 @@ const store = {
     if (!this.tags || force) this.tags = await api('/api/tags');
     return this.tags;
   },
-  changed() { this.books = null; this.tags = null; refreshSide(); },
+  changed() { this.books = null; this.tags = null; },
 };
 
 function currentBookId(books) {
   const last = prefs.get('captureBook', null);
   if (books.some((b) => b.id === last)) return last;
-  return books.find((b) => b.status === 'reading')?.id ?? books[0]?.id ?? null;
+  return books[0]?.id ?? null;
 }
 
 // ---------- shared pieces ----------
 
-const COVER_COLORS = ['#2f4858', '#5b3a29', '#33553c', '#4a3f6b', '#6b3a4a', '#3d5a73'];
 function cover(book, size = '') {
   const placeholder = () => {
-    let n = 0;
-    for (const c of book.title || '') n = (n * 31 + c.charCodeAt(0)) >>> 0;
     const author = (book.authors || '').split(',')[0].trim().split(' ').pop();
-    return h('div', { class: `cover ph ${size}`, style: { background: COVER_COLORS[n % COVER_COLORS.length] }, 'aria-hidden': 'true' },
-      h('b', { text: book.title }), h('i', { text: author }));
+    return h('div', { class: `cover ph ${size}`, 'aria-hidden': 'true' }, h('b', { text: book.title }), h('i', { text: author }));
   };
   if (!book.cover_url) return placeholder();
   const img = h('img', { class: `cover ${size}`, alt: '', loading: 'lazy',
@@ -162,8 +158,7 @@ function cover(book, size = '') {
 function withMarks(text) {
   // search results mark the matching words with \u0002 … \u0003
   const out = [];
-  const parts = String(text).split(/(\u0002[^\u0003]*\u0003)/);
-  for (const part of parts) {
+  for (const part of String(text).split(/(\u0002[^\u0003]*\u0003)/)) {
     if (part.startsWith('\u0002')) out.push(h('mark', { text: part.slice(1, -1) }));
     else if (part) out.push(part);
   }
@@ -172,40 +167,40 @@ function withMarks(text) {
 
 function entryMeta(e, showBook) {
   const bits = [];
-  if (showBook) bits.push(h('span', { class: 'book', text: e.book_title + (e.tags.length || e.note ? ' · ' : '') }));
-  const tail = [];
-  if (e.kind === 'thought') tail.push('[thought]');
-  if (e.tags.length) tail.push(e.tags.map((t) => '#' + t.replace(/ /g, '-')).join(' '));
-  if (e.note) tail.push('+note');
-  bits.push(tail.join(' · '));
-  return bits;
+  if (showBook) bits.push(h('i', { text: e.book_title }));
+  if (e.kind === 'comment') bits.push('comment');
+  if (e.note) bits.push('note');
+  const out = [];
+  bits.forEach((b, k) => { if (k) out.push(' · '); out.push(b); });
+  if (e.tags.length) {
+    if (out.length) out.push(' · ');
+    out.push(h('span', { class: 'tg', text: e.tags.map((t) => '#' + t.replace(/ /g, '-')).join(' ') }));
+  }
+  return out;
 }
 
 function entryRow(e, { showBook = false, fresh = false } = {}) {
-  return h('a', { class: `entry-row${e.kind === 'thought' ? ' thought' : ''}${fresh ? ' fresh' : ''}`, href: `#/entry/${e.id}`, id: `e${e.id}` },
-    h('span', { class: 'pg', text: e.page || '—' }),
+  const meta = entryMeta(e, showBook);
+  return h('a', { class: `entry-row${e.kind === 'comment' ? ' comment' : ''}${fresh ? ' fresh' : ''}`, href: `#/entry/${e.id}`, id: `e${e.id}` },
+    h('span', { class: 'pg', text: e.page || '' }),
     h('div', { class: 'body' },
       h('p', { class: 'txt' }, e.snippet ? withMarks(e.snippet) : e.text),
-      h('span', { class: 'meta' }, entryMeta(e, showBook))));
+      meta.length ? h('span', { class: 'meta' }, meta) : null));
 }
 
 function entryTable(entries, { showBook = true } = {}) {
-  const rows = entries.map((e) => {
-    const tr = h('tr', { onclick: () => go(`entry/${e.id}`) },
-      h('td', { class: 'm', text: e.page || '—' }),
-      h('td', { class: e.kind === 'thought' ? 'thought' : '' }, e.snippet ? withMarks(e.snippet) : e.text,
-        e.note ? h('div', { class: 'note-line', text: '+ ' + e.note }) : null),
-      showBook ? h('td', { text: e.book_title }) : null,
-      h('td', { class: 'tags', text: e.tags.map((t) => '#' + t.replace(/ /g, '-')).join(' ') }),
-      h('td', { class: 'm', text: fullDate(e.created_at) }));
-    return tr;
-  });
+  const rows = entries.map((e) => h('tr', { onclick: () => go(`entry/${e.id}`) },
+    h('td', { class: 'm', text: e.page || '' }),
+    h('td', { class: e.kind === 'comment' ? 'comment' : '' }, e.snippet ? withMarks(e.snippet) : e.text),
+    showBook ? h('td', { class: 'it', text: e.book_title }) : null,
+    h('td', { class: 'tags', text: e.tags.map((t) => '#' + t.replace(/ /g, '-')).join(' ') }),
+    h('td', { class: 'm', text: fullDate(e.created_at) })));
   return h('div', { class: 'table-wrap' },
     h('table', { class: 'grid' },
       h('thead', {}, h('tr', {},
-        h('th', { style: { width: '56px' }, text: 'Pg' }), h('th', { text: 'Entry' }),
-        showBook ? h('th', { style: { width: '200px' }, text: 'Book' }) : null,
-        h('th', { style: { width: '150px' }, text: 'Tags' }), h('th', { style: { width: '104px' }, text: 'Added' }))),
+        h('th', { style: { width: '56px' }, text: 'p.' }), h('th', { text: 'entry' }),
+        showBook ? h('th', { style: { width: '200px' }, text: 'book' }) : null,
+        h('th', { style: { width: '150px' }, text: 'tags' }), h('th', { style: { width: '110px' }, text: 'added' }))),
       h('tbody', {}, rows)));
 }
 
@@ -217,6 +212,23 @@ function toast(message, action) {
     action ? h('button', { type: 'button', onclick: () => { el.remove(); action.run(); } }, action.label) : null);
   document.body.append(el);
   toastTimer = setTimeout(() => el.remove(), action ? 9000 : 4000);
+}
+
+// A confirmation with explicit choices. Resolves to the chosen value, or null if cancelled.
+function confirmDialog({ title, text, choices }) {
+  return new Promise((resolve) => {
+    const dlg = h('dialog', { class: 'confirm', 'aria-labelledby': 'dlg-title' });
+    const done = (value) => { dlg.close(); dlg.remove(); resolve(value); };
+    put(dlg,
+      h('h2', { id: 'dlg-title', text: title }),
+      text ? h('p', { text }) : null,
+      h('div', { class: 'choices' },
+        choices.map((c) => h('button', { type: 'button', class: `btn ${c.danger ? 'danger primary' : ''}`, onclick: () => done(c.value) }, c.label)),
+        h('button', { type: 'button', class: 'btn plain', onclick: () => done(null) }, 'Cancel')));
+    dlg.addEventListener('cancel', (ev) => { ev.preventDefault(); done(null); });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
 }
 
 function errorBox(err, retry) {
@@ -233,7 +245,7 @@ function backLink(label, fallback) {
 
 function tagInput(initial, allTags) {
   let tags = [...initial];
-  const input = h('input', { type: 'text', placeholder: 'Add a tag', autocapitalize: 'none', autocomplete: 'off',
+  const input = h('input', { type: 'text', placeholder: 'add a tag', autocapitalize: 'none', autocomplete: 'off',
     autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'done', 'aria-label': 'Add a tag' });
   const box = h('div', { class: 'tag-input', onclick: () => input.focus() });
   const sugg = h('div', { class: 'suggest' });
@@ -244,7 +256,7 @@ function tagInput(initial, allTags) {
     draw();
   }
   function draw() {
-    put(box, ...tags.map((t) => h('span', { class: 'chip' }, t,
+    put(box, tags.map((t) => h('span', { class: 'chip' }, '#' + t,
       h('button', { type: 'button', 'aria-label': `Remove tag ${t}`, onclick: (ev) => {
         ev.stopPropagation(); tags = tags.filter((x) => x !== t); draw();
       } }, '×'))), input);
@@ -253,7 +265,7 @@ function tagInput(initial, allTags) {
   function drawSuggestions() {
     const q = fold(input.value);
     const list = allTags.filter((t) => !tags.includes(t.name) && (!q || fold(t.name).includes(q))).slice(0, 8);
-    put(sugg, ...list.map((t) => h('button', {
+    put(sugg, list.map((t) => h('button', {
       type: 'button',
       onpointerdown: (ev) => ev.preventDefault(),   // keep the keyboard open; do not add the half-typed word
       onclick: () => { input.value = ''; add(t.name); input.focus(); },
@@ -274,9 +286,17 @@ function tagInput(initial, allTags) {
   input.addEventListener('blur', () => { if (input.value.trim()) { add(input.value); input.value = ''; } });
   draw();
   return {
-    el: h('div', { class: 'field' }, h('span', { text: 'Tags' }), box, sugg),
+    el: h('div', { class: 'field' }, h('span', { text: 'tags' }), box, sugg),
     get value() { if (input.value.trim()) { add(input.value); input.value = ''; } return tags; },
   };
+}
+
+function kindSwitch(get, set, after) {
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Kind' });
+  const draw = () => put(seg, ['quote', 'comment'].map((k) => h('button', { type: 'button', class: get() === k ? 'on' : '',
+    'aria-pressed': get() === k ? 'true' : 'false', onclick: () => { set(k); draw(); after?.(); } }, k === 'quote' ? 'Quote' : 'Comment')));
+  draw();
+  return seg;
 }
 
 // ---------- passage selection ----------
@@ -319,12 +339,10 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
   let mode = startMode || prefs.get('selectMode', 'photo');
   let zoom = 1;
 
-  const hint = h('span', { class: 'sel-hint' });
   const photoBtn = h('button', { type: 'button', onclick: () => setMode('photo') }, 'Photo');
   const textBtn = h('button', { type: 'button', onclick: () => setMode('text') }, 'Large text');
-  const zoomBtn = h('button', { class: 'icon-btn plain', type: 'button', 'aria-label': 'Zoom in', onclick: toggleZoom }, icon('zoomIn', 20));
-  const modes = h('div', { class: 'sel-modes' },
-    h('div', { class: 'seg', role: 'group', 'aria-label': 'Select on' }, photoBtn, textBtn), zoomBtn, hint);
+  const zoomBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Zoom in', onclick: toggleZoom }, icon('zoomIn', 22));
+  const modes = h('div', { class: 'sel-modes' }, h('div', { class: 'seg', role: 'group', 'aria-label': 'Select on' }, photoBtn, textBtn), zoomBtn);
 
   const img = h('img', { src: photo.image_url, alt: 'Photo of the page', draggable: 'false' });
   const wordLayer = h('div', { class: 'layer', 'aria-hidden': 'true' });
@@ -461,8 +479,6 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
   function update() {
     drawMarks();
     markText();
-    hint.textContent = phase === 'none' ? 'Tap the first word' : phase === 'one' ? 'Now tap the last word'
-      : mode === 'text' ? 'Arrows below adjust it' : coarse() ? 'Drag the dots to adjust' : 'Tap again to start over';
     onChange({ start: s, end: e, phase, text: s == null ? '' : joinWords(words.slice(s, e + 1).filter(Boolean)) });
   }
 
@@ -477,7 +493,7 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
 
   function toggleZoom() {
     zoom = zoom === 1 ? 2 : 1;
-    put(zoomBtn, icon(zoom === 1 ? 'zoomIn' : 'zoomOut', 20));
+    put(zoomBtn, icon(zoom === 1 ? 'zoomIn' : 'zoomOut', 22));
     zoomBtn.setAttribute('aria-label', zoom === 1 ? 'Zoom in' : 'Zoom out');
     sizeStage();
     requestAnimationFrame(() => {
@@ -516,7 +532,7 @@ function nudgeBar(sel) {
   const pair = (label, which) => h('span', { class: 'nudge' }, label,
     h('button', { type: 'button', 'aria-label': `Move the ${which} one word back`, onclick: () => sel.nudge(which, -1) }, icon('left')),
     h('button', { type: 'button', 'aria-label': `Move the ${which} one word on`, onclick: () => sel.nudge(which, 1) }, icon('right')));
-  return h('div', { class: 'nudges' }, pair('Start', 'start'), pair('End', 'end'));
+  return h('div', { class: 'nudges' }, pair('start', 'start'), pair('end', 'end'));
 }
 
 // ---------- screens ----------
@@ -535,70 +551,68 @@ async function viewLogin() {
       location.hash = after && !after.startsWith('#/login') ? after : '#/';
     } catch (err) { msg.textContent = err.message; pw.select(); }
   } },
-  h('h1', { class: 'brand' }, 'Marginote'),
+  h('h1', {}, 'Marginote'),
   h('input', { type: 'text', name: 'username', value: 'marginote', autocomplete: 'username', hidden: true, 'aria-hidden': 'true' }),
-  h('label', { class: 'field', for: 'pw' }, h('span', { text: 'Password' }), pw),
+  h('label', { class: 'field', for: 'pw' }, h('span', { text: 'password' }), pw),
   h('button', { class: 'btn primary big', type: 'submit' }, 'Log in'), msg);
   setTimeout(() => pw.focus(), 50);
   return { el: form, bare: true };
 }
 
 async function viewBooks({ params }) {
-  const [books, tags] = await Promise.all([store.getBooks(), store.getTags()]);
+  const books = await store.getBooks(true);   // fresh each time: a cover found in the background shows up
   let sort = prefs.get('booksSort', 'last_entry');
-  let status = prefs.get('booksStatus', 'all');
-  const current = currentBookId(books);
-  const total = books.reduce((n, b) => n + b.entry_count, 0);
-  const SORTS = { last_entry: 'sort: last quote ↓', title: 'sort: title', added: 'sort: added ↓' };
-  const STATUSES = ['all', 'reading', 'paused', 'finished'];
+  let subject = prefs.get('booksSubject', '');
+  const subjects = [...new Set(books.map((b) => b.subject).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  if (subject && !subjects.includes(subject)) subject = '';
+  const SORTS = { last_entry: 'recent first', title: 'by title', added: 'by date added' };
 
-  const q = h('input', { type: 'search', placeholder: 'Filter books or search quotes', 'aria-label': 'Filter books or search quotes',
+  const q = h('input', { type: 'search', placeholder: 'Search', 'aria-label': 'Search books and quotes',
     value: params.get('q') || '', enterkeyhint: 'search' });
-  const sortBtn = h('button', { class: 'btn small', type: 'button', onclick: () => {
-    const keys = Object.keys(SORTS); sort = keys[(keys.indexOf(sort) + 1) % keys.length]; prefs.set('booksSort', sort); draw();
-  } });
-  const statusBtn = h('button', { class: 'btn small', type: 'button', onclick: () => {
-    status = STATUSES[(STATUSES.indexOf(status) + 1) % STATUSES.length]; prefs.set('booksStatus', status); draw();
-  } });
+  const sortSel = h('select', { class: 'filter', 'aria-label': 'Sort by', onchange: () => { sort = sortSel.value; prefs.set('booksSort', sort); draw(); } },
+    Object.entries(SORTS).map(([k, label]) => h('option', { value: k }, label)));
+  sortSel.value = sort;
+  const subjectSel = subjects.length ? h('select', { class: 'filter', 'aria-label': 'Subject', onchange: () => {
+    subject = subjectSel.value; prefs.set('booksSubject', subject); draw();
+  } }, h('option', { value: '' }, 'all subjects'), subjects.map((s) => h('option', { value: s }, s))) : null;
+  if (subjectSel) subjectSel.value = subject;
   const list = h('div');
   const found = h('section');
 
   function draw() {
-    sortBtn.textContent = SORTS[sort];
-    statusBtn.textContent = `status: ${status}`;
     const needle = fold(q.value.trim());
-    let shown = books.filter((b) => (status === 'all' || b.status === status)
-      && (!needle || fold(`${b.title} ${b.subtitle || ''} ${b.authors || ''}`).includes(needle)));
+    let shown = books.filter((b) => (!subject || b.subject === subject)
+      && (!needle || fold(`${b.title} ${b.subtitle || ''} ${b.authors || ''} ${b.subject || ''}`).includes(needle)));
     const key = { last_entry: (b) => b.last_entry_at || b.created_at, added: (b) => b.created_at }[sort];
     shown = [...shown].sort(sort === 'title' ? (a, b) => a.title.localeCompare(b.title) : (a, b) => (key(a) < key(b) ? 1 : -1));
-    put(list, 
-      h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'Title · author' }),
-        h('span', { class: 'w40', style: { textAlign: 'right' }, text: 'Qts' }), h('span', { class: 'w64', style: { textAlign: 'right' }, text: 'Last' })),
-      ...shown.map((b) => h('a', { class: `book-row${b.id === current ? ' current' : ''}`, href: `#/book/${b.id}` },
-        h('span', { class: 'main' },
-          h('span', { class: 't' }, b.id === current ? h('span', { class: 'dot', 'aria-hidden': 'true' }) : null, h('span', { text: b.title })),
-          h('span', { class: 'a', text: [b.authors, b.status].filter(Boolean).join(' · ') })),
-        h('span', { class: 'num w40', text: b.entry_count }),
-        h('span', { class: 'num w64 muted', text: shortDate(b.last_entry_at) }))));
     if (!books.length) {
-      put(list, h('div', { class: 'empty' }, h('span', { text: 'No books yet. Add the book you are reading, then capture your first quote.' }),
-        h('a', { class: 'btn primary', href: '#/book/new' }, icon('plus'), 'Add a book')));
-    } else if (!shown.length) {
-      list.append(h('div', { class: 'empty', text: needle ? 'No book matches; quotes that match are below.' : 'No book with this status.' }));
+      put(list, h('div', { class: 'empty' }, 'No books yet.', h('a', { class: 'btn primary', href: '#/book/new' }, 'Add a book')));
+      return;
     }
+    put(list,
+      shown.length ? h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'title' }),
+        h('span', { class: 'w40', style: { textAlign: 'right' }, text: 'qts' }), h('span', { class: 'w64', style: { textAlign: 'right' }, text: 'last' })) : null,
+      shown.map((b) => h('a', { class: 'book-row', href: `#/book/${b.id}` },
+        cover(b, 'small'),
+        h('span', { class: 'main' },
+          h('span', { class: 't', text: b.title }),
+          h('span', { class: 'a' }, b.authors || '', b.subject ? [b.authors ? ' · ' : '', h('i', { text: b.subject })] : null)),
+        h('span', { class: 'num w40', text: b.entry_count }),
+        h('span', { class: 'num w64 muted', text: b.last_entry_at ? shortDate(b.last_entry_at) : '' }))),
+      shown.length ? h('div', { class: 'list-end' }) : null);
   }
 
   const searchQuotes = debounce(async () => {
     const text = q.value.trim();
     history.replaceState(null, '', text ? `#/?q=${encodeURIComponent(text)}` : '#/');
-    if (text.length < 2) { put(found, ); return; }
+    if (text.length < 2) { put(found); return; }
     try {
       const hits = await api(`/api/search?q=${encodeURIComponent(text)}&limit=30`);
       if (q.value.trim() !== text) return;
-      put(found, 
-        h('div', { class: 'colhead' }, h('span', { text: `Quotes matching “${text}”` }), h('span', { style: { flex: 1, textAlign: 'right' }, text: hits.length })),
-        ...hits.map((e) => entryRow(e, { showBook: true })),
-        hits.length ? null : h('div', { class: 'empty', text: 'No quote or note contains these words.' }));
+      put(found, hits.length
+        ? [h('div', { class: 'colhead' }, h('span', { text: 'quotes' }), h('span', { style: { flex: 1, textAlign: 'right' }, text: hits.length })),
+          hits.map((e) => entryRow(e, { showBook: true })), h('div', { class: 'list-end' })]
+        : h('div', { class: 'empty', text: 'No quote contains these words.' }));
     } catch (err) { put(found, errorBox(err)); }
   }, 250);
   q.addEventListener('input', () => { draw(); searchQuotes(); });
@@ -609,82 +623,151 @@ async function viewBooks({ params }) {
     h('header', { class: 'top' },
       h('div', { class: 'top-row' },
         h('h1', {}, 'Books', h('span', { class: 'count', text: books.length })),
-        h('div', { style: { display: 'flex', gap: '8px' } },
-          h('a', { class: 'icon-btn narrow-only', href: '#/settings', 'aria-label': 'Settings' }, icon('more')),
-          h('a', { class: 'icon-btn', href: '#/book/new', 'aria-label': 'Add a book' }, icon('plus')))),
+        h('div', { style: { display: 'flex' } },
+          h('a', { class: 'icon-btn narrow-only', href: '#/settings', 'aria-label': 'Settings' }, icon('more', 22)),
+          h('a', { class: 'icon-btn', href: '#/book/new', 'aria-label': 'Add a book' }, icon('plus', 22)))),
       h('label', { class: 'search' }, icon('search', 16), q),
-      h('div', { class: 'tools' }, sortBtn, statusBtn, h('span', { class: 'grow', text: plural(total, 'entry').replace('entrys', 'entries') }))),
-    list, found,
-    tags.length ? h('section', { class: 'pad narrow-only' }, h('h2', { class: 'section-title', text: 'Top tags' }),
-      h('div', { class: 'chips' }, tags.slice(0, 12).map((t) => h('a', { class: 'chip', href: `#/quotes?tag=${encodeURIComponent(t.name)}` },
-        t.name, h('span', { class: 'n', text: t.count }))))) : null);
+      books.length ? h('div', { class: 'tools half' }, sortSel, subjectSel) : null),
+    list, found);
   return { el, nav: 'books' };
+}
+
+async function deleteEntries(ids) {
+  await api('/api/entries/delete', { method: 'POST', body: { ids } });
+  store.changed();
 }
 
 async function viewBook({ args: [id], params }) {
   const order = prefs.get('bookOrder', 'page');
   const [book, entries] = await Promise.all([api(`/api/books/${id}`), api(`/api/books/${id}/entries?order=${order}`)]);
   let tag = params.get('tag') || '';
+  let selecting = false;
+  const chosen = new Set();
   const fresh = Number(params.get('fresh')) || null;
   const bookTags = [...new Set(entries.flatMap((e) => e.tags))].sort((a, b) => a.localeCompare(b));
   const q = h('input', { type: 'search', placeholder: 'Search in this book', 'aria-label': 'Search in this book', enterkeyhint: 'search' });
   const list = h('div');
-  const tagSelect = h('select', { class: isWide() ? 'btn small' : null, 'aria-label': 'Show tag', onchange: () => { tag = tagSelect.value; draw(); } },
-    h('option', { value: '' }, 'tag: all'), bookTags.map((t) => h('option', { value: t }, '#' + t)));
+  const selectBar = h('div', { class: 'select-bar', hidden: true });
+  const tagSelect = h('select', { class: 'filter', 'aria-label': 'Tag', onchange: () => { tag = tagSelect.value; draw(); } },
+    h('option', { value: '' }, 'all tags'), bookTags.map((t) => h('option', { value: t }, '#' + t)));
   tagSelect.value = tag;
-  const orderBtn = h('button', { type: 'button', class: 'w36', style: { textAlign: 'left', whiteSpace: 'nowrap' },
-    text: order === 'page' ? 'Pg ↑' : 'New ↓', 'aria-label': order === 'page' ? 'Sorted by page; sort by date' : 'Sorted by date; sort by page',
-    onclick: () => { prefs.set('bookOrder', order === 'page' ? 'date' : 'page'); render(); } });
+  const flip = () => { prefs.set('bookOrder', order === 'page' ? 'date' : 'page'); render(); };
+  const orderBtn = h('button', { type: 'button', class: 'filter', onclick: flip }, order === 'page' ? 'by page' : 'by date');
+
+  const shownEntries = () => {
+    const needle = fold(q.value.trim());
+    return entries.filter((e) => (!tag || e.tags.includes(tag))
+      && (!needle || fold(`${e.text} ${e.note || ''} ${e.tags.join(' ')} ${e.page || ''}`).includes(needle)));
+  };
+
+  function drawSelectBar() {
+    const shown = shownEntries();
+    put(selectBar,
+      h('span', { class: 'grow', text: chosen.size ? `${chosen.size} selected` : 'Tap the entries to delete' }),
+      h('button', { type: 'button', class: 'btn small', onclick: () => {
+        const all = shown.every((e) => chosen.has(e.id));
+        shown.forEach((e) => (all ? chosen.delete(e.id) : chosen.add(e.id)));
+        draw();
+      } }, shown.length && shown.every((e) => chosen.has(e.id)) ? 'None' : 'All'),
+      h('button', { type: 'button', class: 'btn small danger primary', disabled: !chosen.size, onclick: async () => {
+        const n = chosen.size;
+        const ok = await confirmDialog({ title: `Delete ${plural(n, 'entry')}?`, text: 'This cannot be undone.',
+          choices: [{ label: `Delete ${plural(n, 'entry')}`, value: true, danger: true }] });
+        if (!ok) return;
+        try { await deleteEntries([...chosen]); toast(`${plural(n, 'entry')} deleted`); render(); } catch (err) { toast(err.message); }
+      } }, 'Delete'),
+      h('button', { type: 'button', class: 'btn small plain', onclick: () => { selecting = false; chosen.clear(); draw(); } }, 'Done'));
+  }
 
   function draw() {
-    const needle = fold(q.value.trim());
-    const shown = entries.filter((e) => (!tag || e.tags.includes(tag))
-      && (!needle || fold(`${e.text} ${e.note || ''} ${e.tags.join(' ')} ${e.page || ''}`).includes(needle)));
-    put(list, 
-      isWide() ? (shown.length ? entryTable(shown, { showBook: false }) : null) : h('div', {}, shown.map((e) => entryRow(e, { fresh: e.id === fresh }))),
-      shown.length ? null : h('div', { class: 'empty' }, entries.length ? 'Nothing matches.' : h('span', { text: 'No quotes from this book yet.' }),
-        entries.length ? null : h('a', { class: 'btn primary', href: `#/capture?book=${book.id}` }, icon('camera'), 'Capture a quote')));
+    const shown = shownEntries();
+    selectBar.hidden = !selecting;
+    if (selecting) {
+      drawSelectBar();
+      put(list, h('div', {}, shown.map((e) => {
+        const box = h('input', { type: 'checkbox', checked: chosen.has(e.id), 'aria-label': 'Select', onchange: () => {
+          if (box.checked) chosen.add(e.id); else chosen.delete(e.id);
+          drawSelectBar();
+        } });
+        return h('label', { class: `entry-row${e.kind === 'comment' ? ' comment' : ''}` }, h('span', { class: 'check' }, box),
+          h('div', { class: 'body' }, h('p', { class: 'txt' }, e.text), h('span', { class: 'meta', text: e.page ? `p. ${e.page}` : '' })));
+      })), h('div', { class: 'list-end' }));
+      return;
+    }
+    put(list,
+      shown.length ? (isWide() ? entryTable(shown, { showBook: false })
+        : [h('div', { class: 'colhead' }, h('span', { class: 'w36', text: 'p.' }), h('span', { style: { flex: 1 }, text: 'entry' })),
+          shown.map((e) => entryRow(e, { fresh: e.id === fresh })), h('div', { class: 'list-end' })]) : null,
+      !shown.length && entries.length ? h('div', { class: 'empty', text: 'Nothing matches.' }) : null,
+      !entries.length ? h('div', { class: 'empty' }, h('a', { class: 'btn primary', href: `#/capture?book=${book.id}` }, 'Capture a quote')) : null);
   }
   q.addEventListener('input', draw);
+
+  const removeBook = async () => {
+    const n = entries.length;
+    const choice = await confirmDialog({
+      title: `Delete “${book.title}”?`,
+      text: n ? `It has ${plural(n, 'entry')}. This cannot be undone.` : 'This cannot be undone.',
+      choices: [
+        { label: n ? `Delete the book and its ${plural(n, 'entry')}` : 'Delete the book', value: 'book', danger: true },
+        n ? { label: `Delete only its ${plural(n, 'entry')}`, value: 'entries' } : null,
+      ].filter(Boolean),
+    });
+    try {
+      if (choice === 'book') {
+        await api(`/api/books/${book.id}`, { method: 'DELETE' });
+        store.changed();
+        toast('Book deleted');
+        go('');
+      } else if (choice === 'entries') {
+        await deleteEntries(entries.map((e) => e.id));
+        toast(`${plural(n, 'entry')} deleted`);
+        render();
+      }
+    } catch (err) { toast(err.message); }
+  };
+
   draw();
   if (fresh) setTimeout(() => document.getElementById(`e${fresh}`)?.scrollIntoView({ block: 'center' }), 50);
 
   const coverEl = h('span', {}, cover(book, isWide() ? 'large' : ''));
   if (params.get('cover') === '1' && !book.has_cover) {
-    (async () => {
-      for (let k = 0; k < 8; k++) {
-        await new Promise((r) => setTimeout(r, 1500));
+    (async () => {   // the cover is searched in the background: check for up to a minute
+      for (let k = 0; k < 20; k++) {
+        await new Promise((r) => setTimeout(r, 3000));
         if (!coverEl.isConnected) return;
         const b = await api(`/api/books/${id}`).catch(() => null);
         if (b?.has_cover) { put(coverEl, cover(b, isWide() ? 'large' : '')); store.changed(); return; }
       }
     })();
   }
-  const details = [book.authors, book.publisher, book.year, book.edition, book.language].filter(Boolean).join(' · ');
+  const details = [book.publisher, book.year, book.edition, book.translator ? `transl. ${book.translator}` : null].filter(Boolean).join(', ');
+  const counts = [plural(book.quote_count, 'quote'), book.comment_count ? plural(book.comment_count, 'comment') : null,
+    bookTags.length ? plural(bookTags.length, 'tag') : null].filter(Boolean).join(' · ');
   const el = h('div', {},
     h('div', { class: 'bar' }, backLink('Books', ''), h('a', { class: 'link-btn', href: `#/book/${id}/edit` }, 'Edit')),
-    h('header', { class: 'top', style: { paddingTop: '4px' } },
+    h('header', { class: 'top', style: { paddingTop: '6px' } },
       h('div', { class: 'book-head' }, coverEl,
         h('div', { class: 'info' },
           h('h1', { text: book.title }),
-          book.subtitle ? h('span', { class: 'muted', text: book.subtitle }) : null,
-          details ? h('span', { class: 'meta', text: details }) : null,
-          h('span', { class: 'counts', text: `${plural(book.quote_count, 'quote')} · ${plural(book.thought_count, 'thought')} · ${plural(bookTags.length, 'tag')}` }),
-          h('div', { class: 'row-btns', style: { marginTop: '4px' } },
+          book.subtitle ? h('span', { class: 'it', text: book.subtitle }) : null,
+          book.authors ? h('span', { class: 'by', text: book.authors }) : null,
+          details || book.subject ? h('span', { class: 'meta' }, details, details && book.subject ? ' · ' : '', book.subject ? h('i', { text: book.subject }) : null) : null,
+          h('span', { class: 'counts', text: counts }),
+          h('div', { class: 'actions' },
             h('a', { class: 'btn primary small', href: `#/capture?book=${book.id}` }, '+ Quote'),
-            entries.length ? h('a', { class: 'btn small', href: `/api/books/${book.id}/export.md`, download: '' }, 'Export') : null))),
-      entries.length ? h('label', { class: 'search' }, icon('search', 16), q) : null),
-    entries.length && !isWide() ? h('div', { class: 'colhead' }, orderBtn, h('span', { style: { flex: 1 }, text: 'Entry' }), tagSelect) : null,
-    entries.length && isWide() ? h('div', { class: 'tools', style: { padding: '12px 32px' } },
-      h('button', { class: 'btn small', type: 'button', onclick: orderBtn.onclick || (() => orderBtn.click()) }, order === 'page' ? 'sort: page ↑' : 'sort: added ↓'),
-      tagSelect) : null,
-    list);
+            entries.length ? h('a', { class: 'btn small', href: `/api/books/${book.id}/export.md`, download: '' }, 'Export') : null,
+            entries.length ? h('button', { class: 'btn small', type: 'button', onclick: () => { selecting = true; draw(); } }, 'Select') : null))),
+      entries.length ? h('label', { class: 'search' }, icon('search', 16), q) : null,
+      entries.length ? h('div', { class: 'tools' }, orderBtn, bookTags.length ? tagSelect : null) : null),
+    list,
+    selectBar,
+    h('div', { class: 'pad' }, h('button', { class: 'btn small danger', type: 'button', style: { alignSelf: 'flex-start' }, onclick: removeBook }, 'Delete this book…')));
   return { el, nav: 'books' };
 }
 
 async function viewQuotes({ params }) {
-  const books = await store.getBooks();
-  const tags = await store.getTags();
+  const [books, tags] = await Promise.all([store.getBooks(), store.getTags()]);
   const f = { q: params.get('q') || '', tag: params.get('tag') || '', book: params.get('book') || '', kind: params.get('kind') || '' };
   let entries = [];
   let offset = 0;
@@ -713,31 +796,31 @@ async function viewQuotes({ params }) {
     const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v));
     location.hash = `#/quotes${qs.toString() ? '?' + qs : ''}`;
   };
-  const q = h('input', { type: 'search', placeholder: 'Search text, notes, books', 'aria-label': 'Search quotes', value: f.q, enterkeyhint: 'search' });
+  const q = h('input', { type: 'search', placeholder: 'Search', 'aria-label': 'Search quotes', value: f.q, enterkeyhint: 'search' });
   q.addEventListener('input', debounce(() => setFilter('q', q.value.trim()), 400));
   const select = (key, label, options) => {
-    const s = h('select', { class: 'btn small', 'aria-label': label, onchange: () => setFilter(key, s.value) }, options);
+    const s = h('select', { class: 'filter', 'aria-label': label, onchange: () => setFilter(key, s.value) }, options);
     s.value = f[key];
     return s;
   };
   const filters = h('div', { class: 'tools' },
-    select('tag', 'Tag', [h('option', { value: '' }, 'tag: all'), tags.map((t) => h('option', { value: t.name }, `#${t.name} (${t.count})`))]),
-    select('book', 'Book', [h('option', { value: '' }, 'book: all'), books.map((b) => h('option', { value: String(b.id) }, b.title))]),
-    select('kind', 'Kind', [h('option', { value: '' }, 'kind: all'), h('option', { value: 'quote' }, 'quotes'), h('option', { value: 'thought' }, 'thoughts')]),
-    f.tag || f.book || f.kind || f.q ? h('a', { class: 'btn small', href: '#/quotes' }, 'clear') : null);
+    select('book', 'Book', [h('option', { value: '' }, 'all books'), books.map((b) => h('option', { value: String(b.id) }, b.title))]),
+    tags.length ? select('tag', 'Tag', [h('option', { value: '' }, 'all tags'), tags.map((t) => h('option', { value: t.name }, `#${t.name} (${t.count})`))]) : null,
+    select('kind', 'Type', [h('option', { value: '' }, 'all types'), h('option', { value: 'quote' }, 'quotes'), h('option', { value: 'comment' }, 'comments')]),
+    f.tag || f.book || f.kind || f.q ? h('a', { class: 'filter', href: '#/quotes' }, 'clear') : null);
 
   const list = h('div');
   function draw() {
-    put(list, 
-      isWide() ? (entries.length ? entryTable(entries) : null) : h('div', {}, entries.map((e) => entryRow(e, { showBook: !f.book }))),
-      entries.length ? null : h('div', { class: 'empty', text: f.q || f.tag || f.book || f.kind ? 'Nothing matches these filters.' : 'No quotes yet.' }),
+    put(list,
+      entries.length ? (isWide() ? entryTable(entries) : [h('div', { class: 'colhead' }, h('span', { class: 'w36', text: 'p.' }), h('span', { text: 'entry' })),
+        entries.map((e) => entryRow(e, { showBook: !f.book })), h('div', { class: 'list-end' })]) : null,
+      entries.length ? null : h('div', { class: 'empty', text: f.q || f.tag || f.book || f.kind ? 'Nothing matches.' : 'No quotes yet.' }),
       more ? h('div', { class: 'pad' }, h('button', { class: 'btn', type: 'button', onclick: async () => { offset += PAGE; await load(true); draw(); } }, 'Show more')) : null);
   }
   draw();
   const el = h('div', {},
     h('header', { class: 'top' },
-      h('div', { class: 'top-row' }, h('h1', {}, 'Quotes', h('span', { class: 'count', text: entries.length + (more ? '+' : '') })),
-        h('a', { class: 'btn primary wide-only', href: '#/capture' }, '+ New entry')),
+      h('div', { class: 'top-row' }, h('h1', {}, 'Quotes', h('span', { class: 'count', text: entries.length + (more ? '+' : '') }))),
       h('label', { class: 'search' }, icon('search', 16), q), filters),
     list);
   if (f.q) setTimeout(() => { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 30);
@@ -748,19 +831,21 @@ async function viewTags() {
   const tags = await store.getTags(true);
   let byName = prefs.get('tagsByName', false);
   const list = h('div');
-  const toggle = h('button', { class: 'btn small', type: 'button', onclick: () => { byName = !byName; prefs.set('tagsByName', byName); draw(); } });
+  const toggle = h('button', { class: 'filter', type: 'button', onclick: () => { byName = !byName; prefs.set('tagsByName', byName); draw(); } });
   function draw() {
-    toggle.textContent = byName ? 'sort: name' : 'sort: count ↓';
+    toggle.textContent = byName ? 'sorted by name' : 'sorted by use';
     const shown = [...tags].sort(byName ? (a, b) => a.name.localeCompare(b.name) : (a, b) => b.count - a.count);
-    put(list, ...shown.map((t) => h('a', { class: 'pick', href: `#/quotes?tag=${encodeURIComponent(t.name)}` },
-      h('span', { class: 'main' }, h('span', { class: 't mono', text: '#' + t.name })),
-      h('span', { class: 'num muted', text: t.count }))));
-    if (!tags.length) list.append(h('div', { class: 'empty', text: 'No tags yet. Add tags when you save a quote.' }));
+    put(list,
+      tags.length ? h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'tag' }), h('span', { text: 'entries' })) : null,
+      shown.map((t) => h('a', { class: 'pick', href: `#/quotes?tag=${encodeURIComponent(t.name)}` },
+        h('span', { class: 'main' }, h('span', { class: 't tt', text: '#' + t.name })),
+        h('span', { class: 'num muted', text: t.count }))),
+      tags.length ? h('div', { class: 'list-end' }) : h('div', { class: 'empty', text: 'No tags yet.' }));
   }
   draw();
   return {
     el: h('div', {}, h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Tags', h('span', { class: 'count', text: tags.length }))),
-      h('div', { class: 'tools' }, toggle)), list),
+      tags.length ? h('div', { class: 'tools' }, toggle) : null), list),
     nav: 'tags',
   };
 }
@@ -769,32 +854,34 @@ async function viewEntry({ args: [id] }) {
   const e = await api(`/api/entries/${id}`);
   const book = await api(`/api/books/${e.book_id}`);
   const del = async () => {
-    if (!confirm(`Delete this ${e.kind}? This cannot be undone.`)) return;
+    const ok = await confirmDialog({ title: `Delete this ${kindName(e.kind)}?`, text: 'This cannot be undone.',
+      choices: [{ label: `Delete the ${kindName(e.kind)}`, value: true, danger: true }] });
+    if (!ok) return;
     try {
-      await api(`/api/entries/${id}`, { method: 'DELETE' });
-      store.changed();
-      toast(`${e.kind === 'quote' ? 'Quote' : 'Thought'} deleted`);
+      await deleteEntries([e.id]);
+      toast(`${e.kind === 'quote' ? 'Quote' : 'Comment'} deleted`);
       go(`book/${e.book_id}`);
     } catch (err) { toast(err.message); }
   };
   const copy = async () => {
     const cite = [book.authors, book.title].filter(Boolean).join(', ') + (e.page ? `, p. ${e.page}` : '');
-    try { await navigator.clipboard.writeText(`${e.text}\n— ${cite}`); toast('Copied with its reference'); } catch { toast('Copying is not allowed here'); }
+    try { await navigator.clipboard.writeText(`${e.text}\n— ${cite}`); toast('Copied'); } catch { toast('Copying is not allowed here'); }
   };
   const el = h('div', {},
     h('div', { class: 'bar' }, backLink('Back', `book/${e.book_id}`), h('a', { class: 'link-btn', href: `#/entry/${id}/edit` }, 'Edit')),
-    h('div', { class: 'pad' },
+    h('article', { class: 'entry-page' },
       h('a', { class: 'book-link', href: `#/book/${book.id}` }, cover(book, 'small'),
-        h('span', {}, h('span', { class: 't', text: book.title }), h('br'), h('span', { class: 'muted', text: book.authors || '' }))),
-      h('div', { class: 'kv' }, h('span', { text: e.page ? `p. ${e.page}` : 'no page' }), h('span', { text: e.kind }), h('span', { text: `added ${fullDate(e.created_at)}` })),
-      h('p', { class: `quote-big${e.kind === 'thought' ? ' thought-text' : ''}`, text: e.text }),
-      e.note ? h('div', { class: 'note-box', text: e.note }) : null,
+        h('span', {}, h('span', { class: 't', text: book.title }), book.authors ? [h('br'), h('span', { class: 'muted', text: book.authors })] : null)),
+      h('div', { class: 'kv' }, e.page ? h('span', { text: `p. ${e.page}` }) : null, e.kind === 'comment' ? h('span', { class: 'it', text: 'comment' }) : null,
+        h('span', { text: fullDate(e.created_at) })),
+      h('p', { class: `quote-env${e.kind === 'comment' ? ' comment-text' : ''}`, lang: book.language || null, text: e.text }),
+      e.note ? h('p', { class: 'note-p' }, h('b', { text: 'Note.' }), e.note) : null,
       e.tags.length ? h('div', { class: 'chips' }, e.tags.map((t) => h('a', { class: 'chip', href: `#/quotes?tag=${encodeURIComponent(t)}` }, '#' + t))) : null,
       h('div', { class: 'row-btns' },
-        h('a', { class: 'btn', href: `#/entry/${id}/edit` }, icon('pen', 16), 'Edit'),
-        e.photo_id ? h('a', { class: 'btn', href: `#/entry/${id}/photo` }, icon('image', 16), 'Photo') : null,
-        h('button', { class: 'btn', type: 'button', onclick: copy }, 'Copy'),
-        h('button', { class: 'btn danger', type: 'button', onclick: del }, 'Delete'))));
+        h('a', { class: 'btn small', href: `#/entry/${id}/edit` }, 'Edit'),
+        e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo` }, 'Photo') : null,
+        h('button', { class: 'btn small', type: 'button', onclick: copy }, 'Copy'),
+        h('button', { class: 'btn small danger', type: 'button', onclick: del }, 'Delete…'))));
   return { el, nav: 'quotes' };
 }
 
@@ -802,15 +889,13 @@ async function viewEntryEdit({ args: [id] }) {
   const [e, books, tags] = await Promise.all([api(`/api/entries/${id}`), store.getBooks(), store.getTags()]);
   let kind = e.kind;
   const text = h('textarea', { class: 'textarea', rows: 6, id: 'f-text', value: e.text });
-  const page = h('input', { class: 'input', id: 'f-page', value: e.page || '', inputmode: 'text', style: { width: '110px' } });
+  const page = h('input', { class: 'input', id: 'f-page', value: e.page || '', inputmode: 'text', style: { width: '90px' } });
   const note = h('textarea', { class: 'textarea', rows: 3, id: 'f-note', value: e.note || '' });
   const bookSel = h('select', { class: 'select', id: 'f-book' }, books.map((b) => h('option', { value: String(b.id) }, b.title)));
   bookSel.value = String(e.book_id);
   const tagsIn = tagInput(e.tags, tags);
-  const kindSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Kind' });
-  const drawKind = () => put(kindSeg, ...['quote', 'thought'].map((k) =>
-    h('button', { type: 'button', class: kind === k ? 'on' : '', onclick: () => { kind = k; drawKind(); } }, k === 'quote' ? 'Quote' : 'Thought')));
-  drawKind();
+  const textLabel = h('span', { text: kind === 'quote' ? 'passage' : 'comment' });
+  const kindSeg = kindSwitch(() => kind, (k) => { kind = k; }, () => { textLabel.textContent = kind === 'quote' ? 'passage' : 'comment'; });
   const msg = h('div', { class: 'note-line', role: 'alert' });
   const save = async (ev) => {
     ev.preventDefault();
@@ -824,15 +909,15 @@ async function viewEntryEdit({ args: [id] }) {
   };
   const el = h('form', { onsubmit: save },
     h('div', { class: 'bar' }, h('a', { class: 'link-btn', href: `#/entry/${id}` }, 'Cancel'),
-      h('span', { class: 'title', text: 'Edit' }), h('button', { class: 'link-btn', type: 'submit', style: { fontWeight: 600 } }, 'Save')),
+      h('span', { class: 'title', text: 'Edit' }), h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
     h('div', { class: 'details' },
       kindSeg,
-      h('label', { class: 'field', for: 'f-text' }, h('span', { text: kind === 'quote' ? 'Passage' : 'Thought' }), text),
-      h('div', { class: 'two' }, h('label', { class: 'field', for: 'f-page' }, h('span', { text: 'Page' }), page),
-        h('label', { class: 'field', for: 'f-book', style: { flex: 1, minWidth: 0 } }, h('span', { text: 'Book' }), bookSel)),
-      h('label', { class: 'field', for: 'f-note' }, h('span', { text: 'Your note' }), note),
+      h('label', { class: 'field', for: 'f-text' }, textLabel, text),
+      h('div', { class: 'two' }, h('label', { class: 'field', for: 'f-page' }, h('span', { text: 'page' }), page),
+        h('label', { class: 'field', for: 'f-book', style: { flex: 1, minWidth: 0 } }, h('span', { text: 'book' }), bookSel)),
+      h('label', { class: 'field', for: 'f-note' }, h('span', { text: 'note' }), note),
       tagsIn.el,
-      e.photo_id ? h('a', { class: 'btn', href: `#/entry/${id}/photo` }, icon('image', 16), 'Change the selection on the photo') : null,
+      e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo`, style: { alignSelf: 'flex-start' } }, 'Change the selection on the photo') : null,
       msg,
       h('button', { class: 'btn primary big', type: 'submit' }, 'Save')));
   return { el, bare: !isWide(), nav: 'quotes' };
@@ -847,12 +932,14 @@ async function viewEntryPhoto({ args: [id] }) {
   let range = null;
   const sel = makeSelector(photo, { start: e.word_start, end: e.word_end, startMode: 'photo', onChange: (r) => {
     range = r.phase === 'none' ? null : r;
-    preview.textContent = r.text || 'Tap the first word of the passage.';
+    preview.textContent = r.text || 'Tap the first word, then the last.';
     preview.classList.toggle('empty', !r.text);
     saveBtn.disabled = !range || (r.start === e.word_start && r.end === e.word_end);
   } });
   saveBtn.addEventListener('click', async () => {
-    if (!confirm('Replace the saved text with the words selected on the photo?')) return;
+    const ok = await confirmDialog({ title: 'Use this selection?', text: 'The saved text is replaced by the words selected on the photo.',
+      choices: [{ label: 'Replace the text', value: true }] });
+    if (!ok) return;
     try {
       await api(`/api/entries/${id}`, { method: 'PATCH', body: { word_start: range.start, word_end: range.end } });
       store.changed();
@@ -860,9 +947,9 @@ async function viewEntryPhoto({ args: [id] }) {
       go(`entry/${id}`);
     } catch (err) { toast(err.message); }
   });
-  const el = h('div', { class: 'selector-page', style: { display: 'flex', flexDirection: 'column', height: '100dvh' } },
-    h('div', { class: 'bar' }, h('a', { class: 'link-btn', href: `#/entry/${id}`, onclick: () => sel.destroy() }, icon('back', 20), 'Back'),
-      h('span', { class: 'title', text: e.page ? `Page ${e.page}` : 'Photo' }), h('span', { style: { width: '60px' } })),
+  const el = h('div', { style: { display: 'flex', flexDirection: 'column', height: '100dvh' } },
+    h('div', { class: 'bar' }, h('a', { class: 'link-btn', href: `#/entry/${id}` }, icon('back', 20), 'Back'),
+      h('span', { class: 'title', text: e.page ? `p. ${e.page}` : '' }), h('span', { style: { width: '60px' } })),
     sel.el,
     h('div', { class: 'sel-sheet' }, preview, nudgeBar(sel), saveBtn));
   return { el, bare: true, cleanup: () => sel.destroy() };
@@ -898,8 +985,8 @@ async function viewCapture({ params }) {
   const [books, tags] = await Promise.all([store.getBooks(), store.getTags()]);
   if (!books.length) {
     return {
-      el: h('div', {}, h('div', { class: 'bar' }, backLink('Cancel', ''), h('span', { class: 'title', text: 'Capture' }), h('span', { style: { width: '60px' } })),
-        h('div', { class: 'empty' }, 'First add the book you are reading.', h('a', { class: 'btn primary', href: '#/book/new?then=capture' }, icon('plus'), 'Add a book'))),
+      el: h('div', {}, h('div', { class: 'bar' }, backLink('Cancel', ''), h('span', { class: 'title' }), h('span', { style: { width: '60px' } })),
+        h('div', { class: 'empty' }, 'Add a book first.', h('a', { class: 'btn primary', href: '#/book/new?then=capture' }, 'Add a book'))),
       bare: true,
     };
   }
@@ -918,24 +1005,22 @@ async function viewCapture({ params }) {
     cleanup();
     const fileInput = (useCamera) => h('input', { type: 'file', accept: 'image/*', capture: useCamera ? 'environment' : null,
       'aria-label': useCamera ? 'Take a photo' : 'Choose a photo', onchange: (ev) => { const f = ev.target.files[0]; if (f) send(f); } });
-    const drop = h('div', { class: 'drop wide-only' }, 'Or drop a photo of the page here');
+    const drop = h('div', { class: 'drop wide-only' }, 'or drop a photo here');
     for (const t of ['dragenter', 'dragover']) drop.addEventListener(t, (ev) => { ev.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (ev) => { ev.preventDefault(); drop.classList.remove('over'); const f = ev.dataTransfer.files[0]; if (f) send(f); });
-    put(root, 
-      bar(cancel(), 'Capture'),
+    put(root,
+      bar(cancel(), ''),
       h('div', { class: 'capture-start' },
-        h('span', { class: 'label', text: 'What are you reading?' }),
         h('div', { class: 'book-choice' }, cover(book, 'small'),
-          h('div', { class: 'main' }, h('div', { class: 't', text: book.title }), h('div', { class: 'muted', text: book.authors || '' })),
+          h('div', { class: 'main' }, h('div', { class: 't', text: book.title }), book.authors ? h('div', { class: 'muted', text: book.authors }) : null),
           h('button', { class: 'btn small', type: 'button', onclick: stepPickBook }, 'Change')),
         errorMessage ? h('div', { class: 'error', role: 'alert', text: errorMessage }) : null,
         coarse()
-          ? [h('label', { class: 'btn primary big file-btn' }, icon('camera', 20), 'Take a photo of the page', fileInput(true)),
-            h('label', { class: 'btn big file-btn' }, icon('image', 20), 'Choose from your photos', fileInput(false))]
-          : [h('label', { class: 'btn primary big file-btn' }, icon('image', 20), 'Choose a photo of the page', fileInput(false)), drop],
-        h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Type a quote or a thought'),
-        h('p', { class: 'note-line', text: 'Tip: hold the phone straight above the page, the whole page in the frame, and keep your thumb in the margin.' })));
+          ? [h('label', { class: 'btn primary big file-btn' }, icon('camera', 20), 'Take a photo', fileInput(true)),
+            h('label', { class: 'btn big file-btn' }, icon('image', 20), 'Choose a photo', fileInput(false))]
+          : [h('label', { class: 'btn primary big file-btn' }, icon('image', 20), 'Choose a photo', fileInput(false)), drop],
+        h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Type it')));
   }
 
   function stepPickBook() {
@@ -944,31 +1029,30 @@ async function viewCapture({ params }) {
     const list = h('div');
     const draw = () => {
       const needle = fold(q.value.trim());
-      put(list, ...books.filter((b) => !needle || fold(`${b.title} ${b.authors || ''}`).includes(needle)).map((b) =>
+      put(list, books.filter((b) => !needle || fold(`${b.title} ${b.authors || ''}`).includes(needle)).map((b) =>
         h('button', { type: 'button', class: `pick${b.id === book.id ? ' on' : ''}`, onclick: () => { book = b; prefs.set('captureBook', b.id); stepStart(); } },
-          cover(b, 'small'), h('span', { class: 'main' }, h('span', { class: 't', text: b.title }), h('span', { class: 'a', text: b.authors || '' })),
-          h('span', { class: 'num muted', text: b.entry_count }))));
+          cover(b, 'small'), h('span', { class: 'main' }, h('span', { class: 't', text: b.title }), h('span', { class: 'a', text: b.authors || '' })))));
     };
     q.addEventListener('input', draw);
     draw();
-    put(root, 
-      bar(h('button', { class: 'link-btn', type: 'button', onclick: () => stepStart() }, icon('back', 20), 'Back'), 'What are you reading?'),
+    put(root,
+      bar(h('button', { class: 'link-btn', type: 'button', onclick: () => stepStart() }, icon('back', 20), 'Back'), 'Book'),
       h('div', { class: 'pad' }, h('label', { class: 'search' }, icon('search', 16), q),
-        h('a', { class: 'btn', href: '#/book/new?then=capture' }, icon('plus'), 'Add a new book')),
+        h('a', { class: 'btn small', href: '#/book/new?then=capture', style: { alignSelf: 'flex-start' } }, '+ New book')),
       list);
   }
 
   async function send(file) {
     put(root, bar(cancel(), book.title),
       h('div', { class: 'capture-start' }, h('div', { class: 'status-line', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }),
-        'Reading the page… usually 3 to 5 seconds')));
+        'Reading the page…')));
     try {
       const small = await shrinkPhoto(file);
       const form = new FormData();
       form.append('file', small);
       photo = await api('/api/photos', { method: 'POST', form });
       capture.last = { photo, bookId: book.id };
-      if (!photo.words.length) { stepStart('No text was found on this photo. Take it again, closer and straight above the page.'); return; }
+      if (!photo.words.length) { stepStart('No text found on this photo. Take it again, closer.'); return; }
       range = null;
       stepSelect();
     } catch (err) { if (err.status !== 401) stepStart(err.message); }
@@ -985,12 +1069,12 @@ async function viewCapture({ params }) {
     } }, 'Next');
     selector = makeSelector(photo, { start: range?.start, end: range?.end, onChange: (r) => {
       range = r.phase === 'none' ? null : { start: r.start, end: r.end };
-      preview.textContent = r.text || 'Tap the first word of the passage, then the last one.';
+      preview.textContent = r.text || 'Tap the first word, then the last.';
       preview.classList.toggle('empty', !r.text);
       next.disabled = !range;
       next.textContent = r.phase === 'none' ? 'Next' : `Next · ${plural(r.end - r.start + 1, 'word')}`;
     } });
-    put(root, 
+    put(root,
       bar(h('button', { class: 'link-btn', type: 'button', onclick: () => stepStart() }, icon('back', 20), 'Retake'), book.title,
         h('button', { class: 'link-btn', type: 'button', onclick: () => stepDetails(null, true) }, 'Type')),
       selector.el,
@@ -1003,24 +1087,16 @@ async function viewCapture({ params }) {
     root.style.height = '';
     const fromPhoto = Boolean(photo && selectedText != null && !typedWithPhoto);
     let kind = 'quote';
-    const text = h('textarea', { class: 'textarea', rows: fromPhoto ? 5 : 6, id: 'c-text', value: selectedText || '',
-      placeholder: fromPhoto ? '' : 'Type the passage, or your thought' });
-    const detected = photo?.detected_page || '';
-    const page = h('input', { class: 'input', id: 'c-page', value: detected, inputmode: 'text', style: { width: '96px' }, placeholder: '—' });
-    const note = h('textarea', { class: 'textarea', rows: 2, id: 'c-note', placeholder: 'What it makes you think of (optional)' });
+    const text = h('textarea', { class: 'textarea', rows: fromPhoto ? 5 : 6, id: 'c-text', value: selectedText || '' });
+    const page = h('input', { class: 'input', id: 'c-page', value: photo?.detected_page || '', inputmode: 'text', style: { width: '90px' } });
+    const note = h('textarea', { class: 'textarea', rows: 2, id: 'c-note' });
     const tagsIn = tagInput([], tags);
-    const kindSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Kind' });
-    const textLabel = h('span');
-    const drawKind = () => {
-      put(kindSeg, ...['quote', 'thought'].map((k) => h('button', { type: 'button', class: kind === k ? 'on' : '', onclick: () => { kind = k; drawKind(); } },
-        k === 'quote' ? 'Quote' : 'Thought')));
-      textLabel.textContent = kind === 'quote' ? (fromPhoto ? 'Passage · fix any misread word' : 'Passage') : 'Your thought';
-    };
-    drawKind();
+    const textLabel = h('span', { text: 'passage' });
+    const kindSeg = kindSwitch(() => kind, (k) => { kind = k; }, () => { textLabel.textContent = kind === 'quote' ? 'passage' : 'comment'; });
     const saveBtn = h('button', { class: 'btn primary big', type: 'submit' }, `Save to ${book.title}`);
     const save = async (ev) => {
       ev.preventDefault();
-      if (!text.value.trim()) { text.focus(); toast('The passage is empty'); return; }
+      if (!text.value.trim()) { text.focus(); toast('The text is empty'); return; }
       saveBtn.disabled = true;
       try {
         const body = { book_id: book.id, kind, text: text.value, page: page.value, note: note.value, tags: tagsIn.value };
@@ -1038,10 +1114,8 @@ async function viewCapture({ params }) {
       h('div', { class: 'details', style: { flex: 1 } },
         fromPhoto ? null : kindSeg,
         h('label', { class: 'field', for: 'c-text' }, textLabel, text),
-        h('div', { class: 'two' },
-          h('label', { class: 'field', for: 'c-page' }, h('span', { text: 'Page' }), page),
-          detected ? h('span', { class: 'found' }, icon('check', 16), 'Read from the photo; edit if wrong') : null),
-        h('label', { class: 'field', for: 'c-note' }, h('span', { text: 'Your note' }), note),
+        h('label', { class: 'field', for: 'c-page' }, h('span', { text: 'page' }), page),
+        h('label', { class: 'field', for: 'c-note' }, h('span', { text: 'note' }), note),
         tagsIn.el),
       h('div', { class: 'save-bar' }, saveBtn)));
     if (!fromPhoto) setTimeout(() => text.focus(), 50);
@@ -1059,43 +1133,42 @@ async function viewCapture({ params }) {
 
 async function viewBookForm({ args: [id], params }) {
   const editing = id != null;
-  const book = editing ? await api(`/api/books/${id}`) : {};
+  const [book, books] = await Promise.all([editing ? api(`/api/books/${id}`) : {}, store.getBooks()]);
   const field = (key, label, attrs = {}) => {
     const input = h('input', { class: 'input', id: `b-${key}`, value: book[key] ?? '', ...attrs });
-    return { input, el: h('label', { class: 'field', for: `b-${key}`, style: attrs.wrapStyle }, h('span', { text: label }), input) };
+    return { input, el: h('label', { class: 'field', for: `b-${key}` }, h('span', { text: label }), input) };
   };
-  const isbn = field('isbn', 'ISBN (back cover)', { inputmode: 'numeric', autocomplete: 'off', placeholder: '978…' });
-  const title = field('title', 'Title', { required: true, autocapitalize: 'sentences' });
-  const subtitle = field('subtitle', 'Subtitle');
-  const authors = field('authors', 'Author(s)', { placeholder: 'e.g. Henri Poincaré' });
-  const translator = field('translator', 'Translator');
-  const publisher = field('publisher', 'Publisher');
-  const edition = field('edition', 'Edition');
-  const year = field('year', 'Year', { inputmode: 'numeric' });
+  const isbn = field('isbn', 'ISBN', { inputmode: 'numeric', autocomplete: 'off' });
+  const title = field('title', 'title', { required: true, autocapitalize: 'sentences' });
+  const subtitle = field('subtitle', 'subtitle');
+  const authors = field('authors', 'author(s)');
+  const subjects = [...new Set(books.map((b) => b.subject).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const subject = field('subject', 'type or subject', { list: 'subjects', autocomplete: 'off', autocapitalize: 'sentences' });
+  const translator = field('translator', 'translator');
+  const publisher = field('publisher', 'publisher');
+  const edition = field('edition', 'edition');
+  const year = field('year', 'year', { inputmode: 'numeric' });
   const language = h('select', { class: 'select', id: 'b-language' },
     h('option', { value: '' }, '—'), h('option', { value: 'fr' }, 'French'), h('option', { value: 'en' }, 'English'), h('option', { value: 'other' }, 'Other'));
   language.value = ['fr', 'en', ''].includes(book.language || '') ? (book.language || '') : 'other';
-  const status = h('select', { class: 'select', id: 'b-status' },
-    h('option', { value: 'reading' }, 'Reading'), h('option', { value: 'paused' }, 'Paused'), h('option', { value: 'finished' }, 'Finished'));
-  status.value = book.status || 'reading';
   const msg = h('div', { class: 'note-line', role: 'status' });
 
-  const lookupBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+  const lookupBtn = h('button', { class: 'btn small', type: 'button', onclick: async () => {
     msg.textContent = 'Looking up…';
     try {
       const found = await api(`/api/lookup/isbn/${encodeURIComponent(isbn.input.value)}`);
       for (const [k, f] of Object.entries({ title, subtitle, authors, publisher, year })) if (found[k]) f.input.value = found[k];
       if (found.language) language.value = ['fr', 'en'].includes(found.language) ? found.language : 'other';
-      msg.textContent = `Found on ${found.source}. Check the details, then save.`;
+      msg.textContent = `Found on ${found.source}.`;
     } catch (err) { msg.textContent = err.message; }
   } }, 'Look up');
 
   const payload = () => {
     const y = year.input.value.trim();
     const lang = language.value === 'other' ? (book.language && !['fr', 'en'].includes(book.language) ? book.language : null) : language.value || null;
-    return { title: title.input.value, subtitle: subtitle.input.value, authors: authors.input.value, translator: translator.input.value,
-      publisher: publisher.input.value, edition: edition.input.value, year: y ? Number(y) : null, isbn: isbn.input.value,
-      language: lang, status: status.value };
+    return { title: title.input.value, subtitle: subtitle.input.value, authors: authors.input.value, subject: subject.input.value,
+      translator: translator.input.value, publisher: publisher.input.value, edition: edition.input.value,
+      year: y ? Number(y) : null, isbn: isbn.input.value, language: lang };
   };
   const save = async (ev) => {
     ev.preventDefault();
@@ -1106,7 +1179,7 @@ async function viewBookForm({ args: [id], params }) {
       if (editing) {
         await api(`/api/books/${id}`, { method: 'PATCH', body });
         store.changed();
-        toast('Book saved');
+        toast('Saved');
         go(`book/${id}`);
       } else {
         const b = await api('/api/books', { method: 'POST', body });
@@ -1136,47 +1209,33 @@ async function viewBookForm({ args: [id], params }) {
       } catch (err) { coverMsg.textContent = err.message; }
     } });
     coverBox = h('div', { class: 'cover-box' }, coverSlot, h('div', { class: 'info' },
-      h('span', { class: 'label', text: 'Cover' }),
-      h('button', { class: 'btn', type: 'button', onclick: async () => {
-        coverMsg.textContent = 'Looking for a cover online…';
+      h('span', { class: 'label', text: 'cover' }),
+      h('button', { class: 'btn small', type: 'button', onclick: async () => {
+        coverMsg.textContent = 'Looking for a cover…';
         try {
           const b = await api(`/api/books/${id}/cover/fetch`, { method: 'POST' });
           put(coverSlot, cover(b, 'large'));
           coverMsg.textContent = 'Cover found.';
           store.changed();
         } catch (err) { coverMsg.textContent = err.message; }
-      } }, 'Find a cover online'),
-      h('label', { class: 'btn file-btn' }, 'Use my own photo', own), coverMsg));
+      } }, 'Find online'),
+      h('label', { class: 'btn small file-btn' }, 'Use my photo', own), coverMsg));
   }
 
-  const remove = async () => {
-    const n = book.entry_count;
-    if (!confirm(n ? `Delete “${book.title}” and its ${plural(n, 'entry').replace('entrys', 'entries')}? This cannot be undone.` : `Delete “${book.title}”?`)) return;
-    try {
-      await api(`/api/books/${id}`, { method: 'DELETE' });
-      store.changed();
-      toast('Book deleted');
-      go('');
-    } catch (err) { toast(err.message); }
-  };
-
   const el = h('form', { onsubmit: save },
+    h('datalist', { id: 'subjects' }, subjects.map((s) => h('option', { value: s }))),
     h('div', { class: 'bar' }, h('a', { class: 'link-btn', href: editing ? `#/book/${id}` : (params.get('then') === 'capture' ? '#/capture' : '#/') }, 'Cancel'),
-      h('span', { class: 'title', text: editing ? 'Edit book' : 'Add a book' }),
-      h('button', { class: 'link-btn', type: 'submit', style: { fontWeight: 600 } }, 'Save')),
+      h('span', { class: 'title', text: editing ? 'Edit book' : 'New book' }),
+      h('button', { class: 'link-btn strong', type: 'submit' }, 'Save')),
     h('div', { class: 'details' },
       coverBox,
       h('div', { class: 'two' }, h('div', { style: { flex: 1, minWidth: 0 } }, isbn.el), lookupBtn),
-      editing ? null : h('p', { class: 'note-line', text: 'With an ISBN, the details and the cover are filled in for you. Without one, type the title and author; the cover is searched by title.' }),
-      title.el, subtitle.el, authors.el,
-      h('div', { class: 'two' }, h('div', { style: { flex: 1 } }, publisher.el), h('div', { style: { width: '96px' } }, year.el)),
+      title.el, subtitle.el, authors.el, subject.el,
+      h('div', { class: 'two' }, h('div', { style: { flex: 1 } }, publisher.el), h('div', { style: { width: '90px' } }, year.el)),
       h('div', { class: 'two' }, h('div', { style: { flex: 1 } }, edition.el), h('div', { style: { flex: 1 } }, translator.el)),
-      h('div', { class: 'two' },
-        h('label', { class: 'field', for: 'b-language', style: { flex: 1 } }, h('span', { text: 'Language' }), language),
-        h('label', { class: 'field', for: 'b-status', style: { flex: 1 } }, h('span', { text: 'Status' }), status)),
+      h('label', { class: 'field', for: 'b-language' }, h('span', { text: 'language' }), language),
       msg,
-      h('button', { class: 'btn primary big', type: 'submit' }, editing ? 'Save' : 'Add the book'),
-      editing ? h('button', { class: 'btn danger', type: 'button', onclick: remove, style: { alignSelf: 'flex-start' } }, 'Delete this book') : null));
+      h('button', { class: 'btn primary big', type: 'submit' }, editing ? 'Save' : 'Add the book')));
   if (!editing) setTimeout(() => isbn.input.focus(), 50);
   return { el, bare: !isWide(), nav: 'books' };
 }
@@ -1185,52 +1244,42 @@ async function viewSettings() {
   const health = await api('/api/health');
   const backupMsg = h('span', { class: 'note-line', role: 'status' });
   const rows = [
-    ['App', health.version],
-    ['Text recognition', health.tesseract ? `Tesseract ${health.tesseract} · ${health.ocr_languages.join(', ')}` : 'missing'],
+    ['Version', health.version],
+    ['Text recognition', health.tesseract ? `Tesseract ${health.tesseract} (${health.ocr_languages.join(', ')})` : 'missing'],
     ['Page straightening', health.straighten_pages ? 'on' : 'off'],
     ['Online book lookups', health.lookups_enabled ? 'on' : 'off'],
   ];
   const el = h('div', {},
     h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Settings'))),
     h('div', { class: 'pad' },
-      h('div', { class: 'kv', style: { flexDirection: 'column', gap: '6px' } }, rows.map(([k, v]) => h('span', {}, `${k}: `, h('b', { text: v })))),
+      h('table', { class: 'grid', style: { cursor: 'default' } }, h('tbody', {}, rows.map(([k, v]) => h('tr', { style: { cursor: 'default' } },
+        h('td', { text: k }), h('td', { class: 'm', text: v }))))),
       h('div', { class: 'row-btns' },
-        h('button', { class: 'btn', type: 'button', onclick: async () => {
-          try { const r = await api('/api/backup', { method: 'POST' }); backupMsg.textContent = `Saved ${r.file} in data/backups.`; } catch (err) { backupMsg.textContent = err.message; }
+        h('button', { class: 'btn small', type: 'button', onclick: async () => {
+          try { const r = await api('/api/backup', { method: 'POST' }); backupMsg.textContent = `Saved ${r.file}`; } catch (err) { backupMsg.textContent = err.message; }
         } }, 'Back up now'),
-        h('a', { class: 'btn', href: '/docs', target: '_blank', rel: 'noopener' }, 'API documentation'),
-        h('button', { class: 'btn danger', type: 'button', onclick: async () => {
+        h('a', { class: 'btn small', href: '/docs', target: '_blank', rel: 'noopener' }, 'API'),
+        h('button', { class: 'btn small', type: 'button', onclick: async () => {
           await api('/api/logout', { method: 'POST' }).catch(() => null);
           store.changed();
           go('login');
         } }, 'Log out')),
-      backupMsg,
-      h('p', { class: 'note-line', text: 'On iPhone: in Safari, tap Share, then Add to Home Screen, to open Marginote like an app.' })));
+      backupMsg));
   return { el, nav: 'settings' };
 }
 
 // ---------- shell and navigation ----------
 
-const sideTags = h('div', { class: 'chips' });
-function refreshSide() {
-  if (!isWide() || !document.body.contains(sideTags)) return;
-  store.getTags().then((tags) => {
-    put(sideTags, ...tags.slice(0, 16).map((t) => h('a', { class: 'chip', href: `#/quotes?tag=${encodeURIComponent(t.name)}` },
-      t.name, h('span', { class: 'n', text: t.count }))));
-  }).catch(() => {});
-}
-
 function buildShell() {
   const link = (nav, href, label) => h('a', { href, dataset: { nav } }, label);
   const side = h('aside', { class: 'side' },
-    h('a', { href: '#/', class: 'brand', style: { color: 'inherit', textDecoration: 'none' } }, 'Marginote ', h('small', {}, '/ index')),
+    h('a', { href: '#/', class: 'brand' }, 'Marginote'),
     h('a', { class: 'btn primary', href: '#/capture' }, '+ Capture'),
     h('nav', { 'aria-label': 'Main' }, link('books', '#/', 'Books'), link('quotes', '#/quotes', 'Quotes'), link('tags', '#/tags', 'Tags'),
-      link('settings', '#/settings', 'Settings')),
-    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } }, h('h2', { class: 'section-title', text: 'Tags' }), sideTags));
+      link('settings', '#/settings', 'Settings')));
   const tabbar = h('nav', { class: 'tabbar', 'aria-label': 'Main' },
     link('books', '#/', 'Books'), link('quotes', '#/quotes', 'Quotes'), link('tags', '#/tags', 'Tags'),
-    h('span', { class: 'tab-capture' }, h('a', { class: 'btn primary', href: '#/capture', style: { height: '40px', padding: '0 12px', fontSize: '13px' } }, '+ Capture')));
+    h('span', { class: 'tab-capture' }, h('a', { class: 'btn primary', href: '#/capture', style: { minHeight: '38px', padding: '0 12px', fontSize: '16px' } }, '+ Capture')));
   const main = h('main', { class: 'view', id: 'view' });
   put(document.body, h('div', { class: 'app', id: 'app' }, side, main, tabbar));
 }
@@ -1284,14 +1333,13 @@ async function render() {
 }
 
 window.addEventListener('hashchange', () => { sessionStorage.setItem('marginote.nav', '1'); render(); });
-window.matchMedia('(min-width: 960px)').addEventListener('change', () => { refreshSide(); render(); });
+window.matchMedia('(min-width: 960px)').addEventListener('change', () => render());
 
 (async function start() {
   buildShell();
   try {
     const me = await api('/api/me');
     if (!me.logged_in) { sessionStorage.setItem('marginote.after', location.hash); location.replace('#/login'); }
-    else refreshSide();
   } catch { /* shown by render */ }
   render();
 })();

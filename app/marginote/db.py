@@ -74,7 +74,11 @@ SCHEMA_V2 = """
 CREATE INDEX entries_photo ON entries (photo_id);
 """
 
-MIGRATIONS = [SCHEMA_V1, SCHEMA_V2]
+SCHEMA_V3 = """
+ALTER TABLE books ADD COLUMN subject TEXT;   -- type or subject of the book: 'Philosophy', 'Novel'…
+"""
+
+MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3]
 
 
 def now() -> str:
