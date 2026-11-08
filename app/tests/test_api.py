@@ -1,7 +1,7 @@
 import io
 import re
 
-from conftest import make_page
+from conftest import make_page, owner
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -97,7 +97,7 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
     assert quote["page"] == "168" and quote["text"] == preview["text"]
     assert [t["name"] for t in quote["topics"]] == ["méthode", "épistémologie"]
     assert logged_in.get(quote["photo_url"]).status_code == 200
-    assert next(settings.photos_dir.rglob("*.webp"))
+    assert next(owner(settings).photos_dir.rglob("*.webp"))
     assert logged_in.get(quote["photo_url"]).headers["content-type"] == "image/webp"
 
     thought = logged_in.post("/api/entries", json={
@@ -140,7 +140,7 @@ def test_full_capture_flow(logged_in, settings, monkeypatch):
 
     # backup
     name = logged_in.post("/api/backup").json()["file"]
-    assert name.endswith(".zip") and (settings.backups_dir / name).stat().st_size > 0
+    assert name.endswith(".zip") and (owner(settings).backups_dir / name).stat().st_size > 0
 
 
 def test_renaming_a_book_updates_search(logged_in, monkeypatch):
@@ -182,7 +182,7 @@ def test_photo_metadata_is_removed_and_rotation_applied(logged_in, settings):
     photo = logged_in.post("/api/photos", files={"file": ("IMG_0002.JPG", out.getvalue(), "image/jpeg")}).json()
     assert photo["height"] > photo["width"]          # upright again
     assert photo["detected_page"] == "168"           # and readable
-    stored_path = next(settings.photos_dir.rglob(f"{photo['id']}.webp"))
+    stored_path = next(owner(settings).photos_dir.rglob(f"{photo['id']}.webp"))
     assert len(Image.open(stored_path).getexif()) == 0     # no camera, date or location left
     assert b"PhoneMaker" not in stored_path.read_bytes()
 
@@ -218,7 +218,7 @@ def test_photos_are_cached_and_missing_files_give_404(logged_in, settings, monke
     photo = logged_in.post("/api/photos", files={"file": ("p.jpg", make_page("9"), "image/jpeg")}).json()
     r = logged_in.get(photo["image_url"])
     assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
-    next(settings.photos_dir.rglob(f"{photo['id']}.webp")).unlink()
+    next(owner(settings).photos_dir.rglob(f"{photo['id']}.webp")).unlink()
     assert logged_in.get(photo["image_url"]).status_code == 404
     book = logged_in.post("/api/sources", json={"title": "Sans couverture"}).json()
     assert logged_in.get(f"/api/sources/{book['id']}/cover").status_code == 404
@@ -226,7 +226,7 @@ def test_photos_are_cached_and_missing_files_give_404(logged_in, settings, monke
 
 def _photo_path(settings, photo_id):
     import sqlite3
-    conn = sqlite3.connect(settings.db_path)
+    conn = sqlite3.connect(owner(settings).db_path)
     try:
         row = conn.execute("SELECT path FROM photos WHERE id = ?", (photo_id,)).fetchone()
         return row[0] if row else None
@@ -244,15 +244,15 @@ def test_photos_wait_in_the_inbox_then_move_to_their_book(logged_in, settings, m
     filed = _photo_path(settings, photo["id"])
     folder = f"La Science et l’hypothèse essai ({book['id']})"     # ':' removed, Windows-safe
     assert filed == f"{folder}/p168 - {photo['id'][:8]}.webp"
-    assert (settings.photos_dir / filed).is_file()
-    assert not (settings.photos_dir / "inbox" / f"{photo['id']}.webp").exists()
+    assert (owner(settings).photos_dir / filed).is_file()
+    assert not (owner(settings).photos_dir / "inbox" / f"{photo['id']}.webp").exists()
     assert logged_in.get(photo["image_url"]).status_code == 200
 
     # renaming the book renames its folder
     logged_in.patch(f"/api/sources/{book['id']}", json={"title": "La Science et l’hypothèse"})
     renamed = _photo_path(settings, photo["id"])
     assert renamed.startswith(f"La Science et l’hypothèse ({book['id']})/")
-    assert (settings.photos_dir / renamed).is_file() and not (settings.photos_dir / folder).exists()
+    assert (owner(settings).photos_dir / renamed).is_file() and not (owner(settings).photos_dir / folder).exists()
     assert logged_in.get(photo["image_url"]).status_code == 200
 
 
@@ -268,10 +268,10 @@ def test_unused_photos_are_deleted_after_a_day_used_ones_are_kept(logged_in, set
     fresh = logged_in.post("/api/photos", files={"file": ("c.jpg", make_page("14"), "image/jpeg")}).json()
     logged_in.post("/api/entries", json={"source_id": book["id"], "photo_id": used["id"], "text": "Que sais-je ?"})
 
-    conn = sqlite3.connect(settings.db_path)        # make two photos look two days old
+    conn = sqlite3.connect(owner(settings).db_path)        # make two photos look two days old
     conn.execute("UPDATE photos SET created_at = '2020-01-01T00:00:00Z' WHERE id IN (?, ?)", (used["id"], unused["id"]))
     conn.commit(); conn.close()
-    unused_file = settings.photos_dir / _photo_path(settings, unused["id"])
+    unused_file = owner(settings).photos_dir / _photo_path(settings, unused["id"])
 
     with TestClient(create_app(settings)):          # cleanup runs at start, then every hour
         pass
@@ -290,17 +290,17 @@ def test_photos_from_the_first_version_are_filed_on_start(logged_in, settings, m
     photo = logged_in.post("/api/photos", files={"file": ("w.jpg", make_page("90"), "image/jpeg")}).json()
     logged_in.post("/api/entries", json={"source_id": book["id"], "photo_id": photo["id"], "text": "I went to the woods"})
     # put it back where version 0.1 stored photos: photos/<year>/<month>/<id>.jpg
-    filed = settings.photos_dir / _photo_path(settings, photo["id"])
-    legacy = settings.photos_dir / "2026" / "11" / f"{photo['id']}.jpg"
+    filed = owner(settings).photos_dir / _photo_path(settings, photo["id"])
+    legacy = owner(settings).photos_dir / "2026" / "11" / f"{photo['id']}.jpg"
     legacy.parent.mkdir(parents=True); filed.replace(legacy)
-    conn = sqlite3.connect(settings.db_path)
+    conn = sqlite3.connect(owner(settings).db_path)
     conn.execute("UPDATE photos SET path = ? WHERE id = ?", (f"2026/11/{photo['id']}.jpg", photo["id"]))
     conn.commit(); conn.close()
 
     with TestClient(create_app(settings)):
         pass
     assert _photo_path(settings, photo["id"]) == f"Walden ({book['id']})/p90 - {photo['id'][:8]}.jpg"
-    assert not (settings.photos_dir / "2026").exists()        # empty old folders tidied away
+    assert not (owner(settings).photos_dir / "2026").exists()        # empty old folders tidied away
 
 
 def test_curved_page_is_stored_straightened_and_words_match_it(logged_in, settings):
@@ -476,7 +476,7 @@ def test_inbox_photos_are_read_in_the_background_and_kept_until_sorted(logged_in
     assert thumb.headers["content-type"] == "image/webp" and Image.open(io.BytesIO(thumb.content)).width <= 320
 
     # a day later it is still there: the inbox is never cleaned up
-    conn = sqlite3.connect(settings.db_path)
+    conn = sqlite3.connect(owner(settings).db_path)
     conn.execute("UPDATE photos SET created_at = '2020-01-01T00:00:00Z'")
     conn.commit(); conn.close()
     with TestClient(create_app(settings)):
@@ -496,7 +496,7 @@ def test_inbox_photos_are_read_in_the_background_and_kept_until_sorted(logged_in
     other = logged_in.post("/api/photos", params={"later": "true"}, files={"file": ("o.jpg", make_page("9"), "image/jpeg")}).json()
     wait_until_read(logged_in, other["id"])
     assert logged_in.delete(f"/api/photos/{other['id']}").status_code == 200
-    assert not list(settings.photos_dir.rglob(f"{other['id']}*"))
+    assert not list(owner(settings).photos_dir.rglob(f"{other['id']}*"))
 
 
 def test_photos_left_unread_by_a_restart_are_read_on_start(logged_in, settings):
@@ -506,7 +506,7 @@ def test_photos_left_unread_by_a_restart_are_read_on_start(logged_in, settings):
     with routes_photos.OCR_SLOT:
         sent = logged_in.post("/api/photos", params={"later": "true"}, files={"file": ("p.jpg", make_page("27"), "image/jpeg")}).json()
         # simulate a restart: a new app finds the photo still "reading" and queues it again
-        conn = sqlite3.connect(settings.db_path)
+        conn = sqlite3.connect(owner(settings).db_path)
         assert conn.execute("SELECT status FROM photos WHERE id = ?", (sent["id"],)).fetchone()[0] == "reading"
         conn.close()
         restarted = TestClient(create_app(settings))
@@ -547,4 +547,4 @@ def test_backup_status_and_everything_as_a_zip(logged_in, settings, monkeypatch)
     restored = settings.data_dir / "restored.db"
     restored.write_bytes(z.read("marginote.db"))
     assert sqlite3.connect(restored).execute("SELECT title FROM sources").fetchall() == [("Walden",)]
-    assert not list(settings.data_dir.glob(".download-*"))     # the temporary copy is gone
+    assert not list(owner(settings).data_dir.glob(".download-*"))     # the temporary copy is gone

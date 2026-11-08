@@ -1,9 +1,9 @@
 """Who can log in. Each account has its own library (database, photos, covers, backups), and nothing in the
 app reads one library from another.
 
-The owner is the first account: its password is MARGINOTE_PASSWORD from the compose file and its library is
-the data folder itself, as before accounts existed. The others are kept in data/accounts.json, their
-passwords scrambled with scrypt (never stored as typed); their libraries are in data/users/<id>/.
+The owner is the first account: its password is MARGINOTE_PASSWORD from the compose file. The others are
+kept in data/accounts.json, their passwords scrambled with scrypt (never stored as typed). Every library,
+the owner's too, is a folder of its own: data/users/<id>/ (data/users/owner/ for the owner).
 """
 
 import hashlib

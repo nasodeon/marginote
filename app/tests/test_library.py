@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 from marginote import backup, db, linkinfo, lookup, names
 from marginote.main import create_app
 
+from conftest import owner
+
 
 @pytest.fixture(autouse=True)
 def no_cover_search(monkeypatch):
@@ -304,20 +306,20 @@ def test_moving_an_entry_keeps_whom_it_is_about_and_takes_its_photo(logged_in, s
     moved = logged_in.patch(f"/api/entries/{e['id']}", json={"source_id": b["id"]}).json()
     assert moved["source"]["id"] == b["id"]
     assert [p["name"] for p in moved["about"]] == ["Napoléon"] and [t["name"] for t in moved["topics"]] == ["empire"]
-    conn = sqlite3.connect(settings.db_path)
+    conn = sqlite3.connect(owner(settings).db_path)
     path = conn.execute("SELECT path FROM photos WHERE id = ?", (photo["id"],)).fetchone()[0]
     conn.close()
-    assert path.startswith(f"Tome deux ({b['id']})/") and (settings.photos_dir / path).is_file()
+    assert path.startswith(f"Tome deux ({b['id']})/") and (owner(settings).photos_dir / path).is_file()
 
 
 def test_deleting_a_source_removes_its_entries_people_and_cover(logged_in, settings):
     s = new(logged_in, title="Essai", people={"author": ["Personne Seule"]}, topics=["seul"])
     logged_in.post(f"/api/sources/{s['id']}/cover", files={"file": ("c.png", _png(), "image/png")})
     add(logged_in, source_id=s["id"], text="Un mot.")
-    assert (settings.covers_dir / f"{s['id']}.webp").is_file()
+    assert (owner(settings).covers_dir / f"{s['id']}.webp").is_file()
     assert logged_in.delete(f"/api/sources/{s['id']}").status_code == 200
     assert logged_in.get("/api/entries").json() == [] and logged_in.get("/api/people").json() == []
-    assert logged_in.get("/api/topics").json() == [] and not list(settings.covers_dir.iterdir())
+    assert logged_in.get("/api/topics").json() == [] and not list(owner(settings).covers_dir.iterdir())
     assert logged_in.get("/api/search", params={"q": "mot"}).json() == []
 
 
@@ -451,10 +453,10 @@ def test_upgrade_from_version_0_4_keeps_everything(settings):
         assert c.get("/api/search", params={"q": "efforce"}).json()[0]["id"] == 11
         assert c.get("/api/search", params={"q": "appuhn"}).json()[0]["id"] == 11
         status = c.get("/api/backup/status").json()
-        before = [x for x in status["copies"] if x["kind"] == "before upgrade"]
-        assert len(before) == 1 and before[0]["file"].startswith("before-0.6.0-")
+        before = sorted(x["file"][:13] for x in status["copies"] if x["kind"] == "before upgrade")
+        assert before == ["before-0.6.0-", "before-0.7.1-"]       # the new shape, and the move to users/owner
     # the copy made before the upgrade is the old database, ready to go back to version 0.4
-    copy = next(settings.backups_dir.glob("before-*.zip"))
+    copy = next(owner(settings).backups_dir.glob("before-0.6.0-*.zip"))
     old = settings.data_dir / "old.db"
     old.write_bytes(zipfile.ZipFile(copy).read("marginote.db"))
     conn = sqlite3.connect(old)
@@ -464,8 +466,8 @@ def test_upgrade_from_version_0_4_keeps_everything(settings):
     # starting again changes nothing and makes no new copy
     with TestClient(create_app(settings)):
         pass
-    assert len(list(settings.backups_dir.glob("before-*.zip"))) == 1
-    conn = sqlite3.connect(settings.db_path)
+    assert len(list(owner(settings).backups_dir.glob("before-*.zip"))) == 2
+    conn = sqlite3.connect(owner(settings).db_path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.LATEST
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()
@@ -500,10 +502,10 @@ def test_upgrade_from_version_0_5_turns_comments_into_notes(settings, monkeypatc
         assert [s["id"] for s in lien["sources"]] == [3] and [e["id"] for e in lien["entries"]] == [11]
         assert {s["id"]: s["note_count"] for s in c.get("/api/sources").json()}[3] == 2
         assert {n["id"] for n in c.get("/api/notes", params={"q": "mille plateaux"}).json()} == {4, rhizome["id"]}
-        before = [x["file"] for x in c.get("/api/backup/status").json()["copies"] if x["kind"] == "before upgrade"]
-        assert len(before) == 1 and before[0].startswith("before-0.6.0-")
+        before = sorted(x["file"][:13] for x in c.get("/api/backup/status").json()["copies"] if x["kind"] == "before upgrade")
+        assert before == ["before-0.6.0-", "before-0.7.1-"]
         assert c.post("/api/sources", json={"kind": "class", "title": "Un cours", "fetch_cover": False}).status_code == 201
-    conn = sqlite3.connect(settings.db_path)
+    conn = sqlite3.connect(owner(settings).db_path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()

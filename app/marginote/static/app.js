@@ -2722,7 +2722,7 @@ function accountSection(me, accounts) {
 async function viewSettings() {
   const [health, backups, me] = await Promise.all([api('/api/health'), api('/api/backup/status'), api('/api/me')]);
   const accounts = me.owner ? await api('/api/accounts') : [];
-  const folder = me.owner ? 'data' : 'data/users/' + me.id;   // where this library is, on the NAS
+  const folder = 'data/users/' + me.id;   // where this library is, on the NAS
   nav.label('Settings');
   const backupMsg = h('span', { class: 'note-line', role: 'status' });
   const daily = backups.copies.filter((c) => c.kind === 'daily');

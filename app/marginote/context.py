@@ -1,8 +1,8 @@
 """What every part of the API shares: the settings, the accounts, each account's library, the login check.
 
-A library is one account's own data folder: its database, photos, covers and backups. A request only ever
-reaches the library of the account logged in: no call takes a library as a parameter, so no call can name
-someone else's.
+A library is one account's own folder, data/users/<id>/ (the owner's is data/users/owner/): its database,
+photos, covers and backups. A request only ever reaches the library of the account logged in: no call takes
+a library as a parameter, so no call can name someone else's.
 """
 
 import dataclasses
@@ -25,6 +25,45 @@ from .files import Files
 
 log = logging.getLogger("marginote")
 
+# what made up the owner's library, at the top of the data folder, before 0.7.1
+OWNER_ITEMS = ("marginote.db", "marginote.db-wal", "marginote.db-shm", "photos", "covers", "backups")
+
+
+def gather_owner_library(data_dir: Path, version: str) -> list[str]:
+    """Until 0.7.1 the owner's library was the data folder itself; it now has a folder like everyone's,
+    data/users/owner/. Done once, at start, before anything opens the database. Each item is renamed on the
+    same disk, so it is instant whatever the number of photos, and a zip of the database is made first.
+    Nothing is ever overwritten: if both places hold something, the app stops and says so."""
+    target = data_dir / "users" / OWNER
+    present = [name for name in OWNER_ITEMS if (data_dir / name).exists()]
+    if not present:
+        return []
+
+    def empty_dir(path: Path) -> bool:
+        return path.is_dir() and not any(path.iterdir())
+
+    for name in present:
+        if (target / name).exists() and not empty_dir(target / name) and not empty_dir(data_dir / name):
+            raise RuntimeError(f"Both data/{name} and data/users/{OWNER}/{name} hold files: move one of them aside, "
+                               "then start the app again")
+    if (data_dir / "marginote.db").exists() and not (target / "marginote.db").exists():
+        backup.before_upgrade(data_dir / "marginote.db", data_dir / "backups", version)   # moved with the rest
+    target.mkdir(parents=True, exist_ok=True)
+    moved = []
+    for name in OWNER_ITEMS:
+        src, dst = data_dir / name, target / name
+        if not src.exists():
+            continue
+        if empty_dir(src) and dst.exists():
+            src.rmdir()
+            continue
+        if empty_dir(dst):
+            dst.rmdir()
+        src.rename(dst)
+        moved.append(name)
+    log.info("Your library now has its own folder, data/users/%s/: moved %s", OWNER, ", ".join(moved))
+    return moved
+
 
 @dataclass
 class Library:
@@ -37,9 +76,10 @@ class Library:
 
 
 class Context:
-    def __init__(self, settings: Settings, shape_changed_in: str = "") -> None:
+    def __init__(self, settings: Settings, shape_changed_in: str = "", version: str = "") -> None:
         self.settings = settings
         settings.data_dir.mkdir(parents=True, exist_ok=True)
+        gather_owner_library(settings.data_dir, version)
         self.accounts = Accounts(settings.data_dir / "accounts.json")
         self.shape_changed_in = shape_changed_in
         self.reader_queue: queue.Queue = queue.Queue()   # (library, photo id) of inbox photos waiting to be read
@@ -68,7 +108,7 @@ class Context:
     # ----- libraries -----
 
     def folder_of(self, account_id: str) -> Path:
-        return self.settings.data_dir if account_id == OWNER else self.settings.data_dir / "users" / account_id
+        return self.settings.data_dir / "users" / account_id
 
     def library(self, account_id: str) -> Library:
         """The account's library, opened (and brought up to date) the first time it is needed."""

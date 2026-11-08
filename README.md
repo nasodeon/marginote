@@ -39,7 +39,7 @@ source author's unless you name someone else (a quote within a quote).
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
-  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.7.0`)
+  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.7.1`)
 
 ## Install
 
@@ -55,7 +55,7 @@ source author's unless you name someone else (a quote within a quote).
 
 ## Accounts and languages
 
-You are the owner: your password is `MARGINOTE_PASSWORD`, and your library is the data folder itself.
+You are the owner: your password is `MARGINOTE_PASSWORD`, and your library is `data/users/owner/`.
 Your name starts as `admin`; change it in Settings.
 
 Settings › People with access adds someone: a name, a password (8 characters at least) and a language.
@@ -82,15 +82,18 @@ Stop the project and deploy it again: the compose file sets `pull_policy: always
 downloaded. The data folder is kept.
 
 When an update changes the shape of the database, the app first writes a copy of the database as it was to
-`data/backups/before-<version>-<date>.zip`. Nothing is lost in the change: ids, quotes, notes, pages, photos
-and covers all stay.
+the library's `backups/before-<version>-<date>.zip`. Nothing is lost in the change: ids, quotes, notes, pages,
+photos and covers all stay.
 
 - 0.5.0: books become sources, authors become people, tags become topics.
-- 0.7.0 does not change the shape of the database. Accounts are added beside it; your library stays
-  where it is, and devices already logged in stay logged in.
 - 0.6.0: comments become notes on their source, about the same people and topics (with their page, and
   your note on the comment added below its text); a note that referred to a comment now refers to its
   source. Quotes can have no source, notes can be on sources, and classes are a new kind of source.
+- 0.7.1: accounts. On its first start, your library (until then the top of the data folder:
+  `marginote.db`, `photos/`, `covers/`, `backups/`) moves into `data/users/owner/`, after a copy of the
+  database to `before-0.7.1-<date>.zip`. Each item is renamed on the same disk, so it is instant; nothing is
+  overwritten (if both places hold files, the app stops and says so). The database itself is unchanged,
+  and devices already logged in stay logged in.
 
 Do not use a one-click "update" or "recreate" button on the `marginote` container (UGOS, Portainer…): it
 shares the Tailscale container's network, and those buttons cannot rebuild such a container (Docker
@@ -100,17 +103,22 @@ answers "conflicting options: hostname and the network mode"), which leaves it d
 
 | Back to | Copy to restore | Image |
 | --- | --- | --- |
+| 0.6.1 | none: the database is the same | `marginote:0.6.1` |
 | 0.5.1 | `before-0.6.0-<date>.zip` | `marginote:0.5.1` |
 | 0.4.0 | `before-0.5.0-<date>.zip` | `marginote:0.4.0` |
 
 1. Stop the project.
-2. In `data/`, move `marginote.db` aside (and `marginote.db-wal`, `marginote.db-shm` if present).
-3. Unzip the copy and put its `marginote.db` in `data/`.
+2. Versions before 0.7.1 keep your library at the top of `data/`: move `marginote.db` (with
+   `marginote.db-wal` and `marginote.db-shm` if present), `photos/`, `covers/` and `backups/` from
+   `data/users/owner/` up into `data/`. The other people's libraries stay in `data/users/`, unused by
+   those versions.
+3. For 0.5.1 or 0.4.0: move `data/marginote.db` aside, unzip the copy from `data/backups/` and put its
+   `marginote.db` in `data/`.
 4. In the compose file, replace `marginote:latest` with the image above, and deploy.
 
 Photos and covers stay where they are, and the older version finds them (with 0.4.0, a cover replaced
 since shows blank until you look it up again). What you captured since the upgrade is not in the old
-database. The code of each version is on its branch: `release-0.4`, `release-0.5`.
+database. The code of each version is on its branch: `release-0.4`, `release-0.5`, `release-0.6`.
 
 ## Sending from other apps
 
@@ -141,15 +149,19 @@ The shortcut opens `https://<your address>/#/capture?share=` followed by what wa
 ## Backups
 
 Every night (03:00 in the container's time zone, `TZ`) the app writes a consistent copy of each library's
-database to its `backups/` folder (`data/backups/marginote-<date>.zip` for yours). It keeps the last 14 days and the first copy of each of the last 6
-months; copies made before an upgrade are never removed. Settings shows the copies and the space used, makes
+database to its `backups/` folder (`data/users/owner/backups/marginote-<date>.zip` for yours). It keeps the
+last 14 days and the first copy of each of the last 6 months; copies made before an upgrade are never
+removed. Settings shows the copies and the space used, makes
 a copy on demand, and downloads everything as one zip (database, photos, covers).
 
 These copies sit next to the database. Also back up the whole `data` folder from the NAS: snapshots of the
 shared folder, and a scheduled copy to another disk, run after the nightly copy.
 
-To restore: stop the project, move `marginote.db` (and any `marginote.db-wal`, `marginote.db-shm`) aside,
-unzip a copy from `backups/` and put its `marginote.db` in `data/`, deploy again.
+To restore one library: stop the project; in its folder (`data/users/<id>/`), move `marginote.db` (and any
+`marginote.db-wal`, `marginote.db-shm`) aside, unzip a copy from its `backups/` and put the `marginote.db`
+in its place; deploy again. The other libraries are not touched. A copy of the whole `data` folder holds
+every library and the accounts; when restoring from a file copy (rather than a snapshot), use the zips in
+`backups/`, since a copy made while the app writes may catch the database half-written.
 
 ## Data
 
@@ -157,14 +169,17 @@ Everything lives in the data folder:
 
 ```
 data/
-  marginote.db                  sources, people, topics, quotes, notes (one file)
-  photos/inbox/                 pages sent to be sorted later
-  photos/<Title> (<id>)/        a source's page photos, named after their page: p168 - 1a2b3c4d.webp
-  covers/<id>.webp              covers and video pictures
-  backups/                      database copies (zips)
-  accounts.json                 the other accounts: names, languages, scrambled passwords (scrypt)
-  users/<id>/                   another person's library: marginote.db, photos/, covers/, backups/
-  secret_key                    signs the login cookie
+  accounts.json                 the accounts: names, languages, scrambled passwords (scrypt)
+  secret_key                    signs the login cookies
+  users/
+    owner/                      your library
+      marginote.db              sources, people, topics, quotes, notes (one file)
+      photos/inbox/             pages sent to be sorted later
+      photos/<Title> (<id>)/    a source's page photos, named after their page: p168 - 1a2b3c4d.webp
+      covers/<id>.webp          covers and video pictures
+      backups/                  database copies (zips)
+    <id>/                       another person's library, laid out the same way
+    removed/                    libraries of removed accounts, set aside
 ```
 
 A source's folder is renamed with it, and empty folders are removed. When a page was curved, the photo kept

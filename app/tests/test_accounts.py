@@ -60,8 +60,9 @@ def test_owner_logs_in_as_before_and_old_cookies_still_work(settings):
         c.cookies.set("marginote_session", cookie)
         assert c.get("/api/me").json()["owner"] is True
         assert c.get("/api/sources").status_code == 200
-    # the owner's library is the data folder itself, as before: nothing was moved
-    assert (settings.data_dir / "marginote.db").exists() and not (settings.data_dir / "users").exists()
+    # every library has its own folder, the owner's too
+    assert (settings.data_dir / "users" / "owner" / "marginote.db").exists()
+    assert not (settings.data_dir / "marginote.db").exists()
 
 
 def test_accounts_are_managed_by_the_owner_only(settings):
@@ -140,7 +141,7 @@ def test_nobody_reaches_anyone_elses_library(settings):
         assert c.get("/api/search", params={"q": "phrase"}).json() == []
     user_dir = settings.data_dir / "users" / cid
     assert (user_dir / "marginote.db").exists() and list((user_dir / "backups").glob("marginote-*.zip"))
-    assert not list((settings.data_dir / "backups").glob("marginote-*.zip"))
+    assert not list((settings.data_dir / "users" / "owner" / "backups").glob("marginote-*.zip"))
 
 
 def test_passwords_change_and_accounts_go(settings):
@@ -205,3 +206,48 @@ def test_french_screens_are_made_from_the_english_ones():
 def _quiet_lookups(monkeypatch):
     from marginote import lookup
     monkeypatch.setattr(lookup, "find_cover", lambda *a: None)
+
+
+def test_the_owners_library_moves_into_its_own_folder_once(settings):
+    """A data folder as version 0.6 left it: the owner's library at its top. On start it moves, whole, into
+    users/owner/; nothing is lost, logins keep working, and a second start changes nothing."""
+    data = settings.data_dir
+    with TestClient(create_app(settings)) as c:            # make a library, then put it back where 0.6 kept it
+        login(c, "", OWNER_PW)
+        src = c.post("/api/sources", json={"title": "Les Essais", "fetch_cover": False}).json()
+        c.post(f"/api/sources/{src['id']}/cover", files={"file": ("c.jpg", make_page(), "image/jpeg")})
+        photo = c.post("/api/photos", files={"file": ("p.jpg", make_page("12"), "image/jpeg")}).json()
+        c.post("/api/entries", json={"source_id": src["id"], "photo_id": photo["id"], "text": "Que sais-je ?"})
+        c.post("/api/backup")
+    home = data / "users" / "owner"
+    for name in ("marginote.db", "photos", "covers", "backups"):
+        (home / name).rename(data / name)
+    home.rmdir()
+    (data / "users").rmdir()
+    files_before = sorted(p.relative_to(data).as_posix() for p in data.rglob("*") if p.is_file()
+                          and p.parts[len(data.parts)] in ("photos", "covers"))
+    with TestClient(create_app(settings)) as c:
+        login(c, "", OWNER_PW)
+        assert [e["text"] for e in c.get(f"/api/sources/{src['id']}/entries").json()] == ["Que sais-je ?"]
+        assert c.get(f"/api/photos/{photo['id']}/image").status_code == 200
+        assert c.get(f"/api/sources/{src['id']}/cover").status_code == 200
+        copies = c.get("/api/backup/status").json()["copies"]
+        assert [x["kind"] for x in copies].count("daily") == 1 and any(x["file"].startswith("before-0.7.1-") for x in copies)
+    for name in ("marginote.db", "photos", "covers", "backups"):
+        assert not (data / name).exists() and (home / name).exists()
+    assert sorted("/".join(p.relative_to(home).parts) for p in home.rglob("*") if p.is_file()
+                  and p.parts[len(home.parts)] in ("photos", "covers")) == files_before
+    with TestClient(create_app(settings)):                  # again: nothing moves, no new copy
+        pass
+    assert len(list((home / "backups").glob("before-*.zip"))) == 1
+
+
+def test_the_move_never_mixes_two_libraries(settings):
+    data = settings.data_dir
+    (data / "users" / "owner" / "photos").mkdir(parents=True)
+    (data / "users" / "owner" / "photos" / "a.webp").write_bytes(b"x")
+    (data / "photos").mkdir(parents=True)
+    (data / "photos" / "b.webp").write_bytes(b"y")
+    with pytest.raises(RuntimeError, match="move one of them aside"):
+        create_app(settings)
+    assert (data / "photos" / "b.webp").exists() and (data / "users" / "owner" / "photos" / "a.webp").exists()

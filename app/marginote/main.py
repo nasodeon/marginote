@@ -25,7 +25,7 @@ from .accounts import LANGUAGES, OWNER, check_password, public
 from .config import Settings, load_settings
 from .context import Context
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 # the release that gave the database its current shape: names the copy made before upgrading to it
 SHAPE_CHANGED_IN = "0.6.0"
 STATIC = Path(__file__).parent / "static"
@@ -97,12 +97,12 @@ class AccountPatch(BaseModel):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
-    ctx = Context(settings, SHAPE_CHANGED_IN)
+    logging.basicConfig(level=logging.INFO)    # before the libraries open: what they do appears in the log
+    ctx = Context(settings, SHAPE_CHANGED_IN, VERSION)
     ctx.libraries()     # every library is opened, and brought up to date, now rather than at first use
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        logging.basicConfig(level=logging.INFO)
         if not settings.password:
             log.warning("MARGINOTE_PASSWORD is empty: the owner cannot log in until you set it in the compose file")
         backup.start_maintenance(ctx.libraries, settings.backup_hour, settings.backups_kept, settings.backups_monthly)

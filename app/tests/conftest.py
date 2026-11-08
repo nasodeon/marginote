@@ -5,6 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw, ImageFont
 
+import dataclasses
+
 from marginote.config import Settings
 from marginote.main import create_app
 
@@ -126,3 +128,8 @@ def logged_in(client: TestClient) -> TestClient:
     r = client.post("/api/login", json={"password": "correct horse"})
     assert r.status_code == 200
     return client
+
+
+def owner(settings: Settings) -> Settings:
+    """The owner's library folder (data/users/owner/), with the same names for its files."""
+    return dataclasses.replace(settings, data_dir=settings.data_dir / "users" / "owner")
