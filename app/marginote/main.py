@@ -21,12 +21,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import backup, dewarp, ocr, routes_admin, routes_entries, routes_library, routes_photos
+from . import backup, dewarp, export_pdf, ocr, routes_admin, routes_entries, routes_export, routes_library, routes_photos
 from .accounts import LANGUAGES, OWNER, check_password, public
 from .config import Settings, load_settings
 from .context import Context
 
-VERSION = "0.7.2"
+VERSION = "0.8.0"
 # the release that gave the database its current shape: names the copy made before upgrading to it
 SHAPE_CHANGED_IN = "0.6.0"
 # the release that gave every library, the owner's too, its own folder: names the copy made before the move
@@ -160,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "missing_ocr_languages": [lang for lang in wanted if lang not in installed],
             "straighten_pages": settings.straighten_pages and dewarp.available(),
             "barcode_reader": ocr.BARCODE_READER,
+            "export_pdf": export_pdf.works(),
             "lookups_enabled": settings.lookups_enabled,
             "password_set": bool(settings.password),
         }
@@ -259,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             folder.rename(aside / f"{account['id']}-{time.strftime('%Y-%m-%d')}")
         return {"removed": account_id}
 
-    for module in (routes_library, routes_entries, routes_photos, routes_admin):
+    for module in (routes_library, routes_entries, routes_photos, routes_admin, routes_export):
         app.include_router(module.router(ctx))
 
     app.mount("/static", StaticAssets(directory=STATIC), name="static")

@@ -66,7 +66,8 @@ const plural = (n, word) => `${n} ${n === 1 ? word : WORDS[word] || word + 's'}`
         """// how many of something, in French: 0 and 1 take the singular
 const WORDS = { quote: ['citation', 'citations'], note: ['note', 'notes'], source: ['source', 'sources'], page: ['page', 'pages'],
   person: ['personne', 'personnes'], work: ['œuvre', 'œuvres'], word: ['mot', 'mots'], entry: ['entrée', 'entrées'],
-  copy: ['copie', 'copies'], translation: ['traduction', 'traductions'] };
+  copy: ['copie', 'copies'], translation: ['traduction', 'traductions'], author: ['auteur', 'auteurs'],
+  topic: ['thème', 'thèmes'] };
 const plural = (n, word) => { const w = WORDS[word] || [word, word + 's']; return `${n} ${n <= 1 ? w[0] : w[1]}`; };""")
 
     a = s.index("// What each kind of source is called")
@@ -226,6 +227,9 @@ const KINDS = {
         h('p', { class: 'note-line', text: 'L’app installée et Chrome partagent la même connexion : connectez-vous une fois. Si l’icône sur l’écran d’accueil porte un petit logo Chrome dans un coin, Chrome a créé un simple raccourci au lieu d’installer l’app, et un raccourci n’est pas dans le menu Partager : supprimez-le, puis installez à nouveau depuis ⋮.' }),
         h('p', { class: 'note-line', text: 'Une app qui ne partage qu’un lien vers le livre (Kindle) : copiez plutôt le passage, puis ici, Ajouter › Coller ce que vous avez copié.' })]),
 """) + s[b:]
+
+    ctx("    put(kindsBox, kinds.length > 1 ? filterRow([['', 'all'], ...kinds.map((k) => [k, `${KINDS[k].several} ${present[k]}`])], st.kind,",
+        "    put(kindsBox, kinds.length > 1 ? filterRow([['', 'tout'], ...kinds.map((k) => [k, `${KINDS[k].several} ${present[k]}`])], st.kind,")
 
     # ---------- plain texts: replaced wherever they appear as a whole string ----------
     L = {
@@ -560,6 +564,40 @@ const KINDS = {
         "missing": "absente",
         "Log out": "Se déconnecter",
         "Main": "Principal",
+        # export
+        "Your quotes and notes in a PDF or Word file, by author, by topic or by source, with a table of contents you can tap.":
+            "Vos citations et notes dans un fichier PDF ou Word, classées par auteur, par thème ou par source, avec un sommaire cliquable.",
+        "Export…": "Exporter…",
+        "All authors": "Tous les auteurs",
+        "All topics": "Tous les thèmes",
+        "All sources": "Toutes les sources",
+        "Search an author": "Chercher un auteur",
+        "Search a topic": "Chercher un thème",
+        "Search a source": "Chercher une source",
+        "No author has quotes or notes yet.": "Aucun auteur n’a encore de citations ni de notes.",
+        "No topic has quotes or notes yet.": "Aucun thème n’a encore de citations ni de notes.",
+        "No source has quotes or notes yet.": "Aucune source n’a encore de citations ni de notes.",
+        "${n} of ${total}": "${n} sur ${total}",
+        "Said, with no source": "Paroles sans source",
+        "what people said · ${plural(choices.said, 'quote')}": "ce que des personnes ont dit · ${plural(choices.said, 'quote')}",
+        "Choose at least one.": "Choisissez-en au moins un.",
+        "Choose quotes, notes, or both.": "Choisissez les citations, les notes, ou les deux.",
+        "Download the PDF": "Télécharger le PDF",
+        "Download the Word file": "Télécharger le fichier Word",
+        "Preparing…": "Préparation…",
+        "Open the PDF": "Ouvrir le PDF",
+        "Open the Word file": "Ouvrir le fichier Word",
+        "Ready (${size(made.size)}) · ": "Prêt (${size(made.size)}) · ",
+        "Download again": "Télécharger à nouveau",
+        "Opens in Safari, where you can share it or save it to Files.":
+            "S’ouvre dans Safari, où vous pouvez le partager ou l’enregistrer dans Fichiers.",
+        "Your quotes and notes, gathered in one file.": "Vos citations et notes, rassemblées en un fichier.",
+        "Organise by": "Classer par",
+        "Choose": "Choisir",
+        "Content": "Contenu",
+        "Authors": "Auteurs",
+        "with your comments": "avec vos commentaires",
+        "Bibliography at the end": "Bibliographie à la fin",
     }
     pat = re.compile(r"'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`")
     used = {k: 0 for k in L}

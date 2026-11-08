@@ -25,6 +25,13 @@ the app is reachable only through your private Tailscale network.
 Every section and group of a page folds away with its − button (+ shows it again); each device remembers
 what you folded.
 
+**Export** (Settings › Export): your quotes and notes as a PDF or a Word file, organised by author, by topic
+or by source, for the ones you tick or all of them. Page 1 has a table of contents you can tap. In each
+chapter, sources come by author then year, quotes in page order, each with its reference (« Auteur, *Titre*,
+p. 42 »), then your notes; a bibliography of every source cited closes the file. The Word file uses named
+styles (Citation, Référence, Note…) so one change in Word restyles them all. The file is made on your NAS
+and kept in memory for 15 minutes, never on disk; on an iPhone it opens in Safari, to share or save.
+
 A quote takes its source's people and topics; untick one when a passage is not about it. Its words are its
 source author's unless you name someone else (a quote within a quote).
 
@@ -39,7 +46,7 @@ source author's unless you name someone else (a quote within a quote).
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
-  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.7.2`)
+  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.8.0`)
 
 ## Install
 
@@ -95,6 +102,8 @@ photos and covers all stay.
   overwritten (if both places hold files, the app stops and says so). The database itself is unchanged,
   and devices already logged in stay logged in.
 - 0.7.2: Android's Share menu, and the French tab names fit narrow phones. Nothing changes in the data.
+- 0.8.0: export to PDF and Word. Nothing changes in the data; the image is about 90 MB bigger (the
+  typesetting program that makes the PDFs).
 
 Do not use a one-click "update" or "recreate" button on the `marginote` container (UGOS, Portainer…): it
 shares the Tailscale container's network, and those buttons cannot rebuild such a container (Docker
@@ -104,6 +113,7 @@ answers "conflicting options: hostname and the network mode"), which leaves it d
 
 | Back to | Copy to restore | Image |
 | --- | --- | --- |
+| 0.7.2 | none: nothing changed in the data | `marginote:0.7.2` |
 | 0.7.1 | none: nothing changed in the data | `marginote:0.7.1` |
 | 0.6.1 | none: the database is the same | `marginote:0.6.1` |
 | 0.5.1 | `before-0.6.0-<date>.zip` | `marginote:0.5.1` |
@@ -120,7 +130,7 @@ answers "conflicting options: hostname and the network mode"), which leaves it d
 
 Photos and covers stay where they are, and the older version finds them (with 0.4.0, a cover replaced
 since shows blank until you look it up again). What you captured since the upgrade is not in the old
-database. The code of each version is on its branch: `release-0.4`, `release-0.5`, `release-0.6`.
+database. The code of each version is on its branch: `release-0.4`, `release-0.5`, `release-0.6`, `release-0.7`.
 
 ## Sending from other apps
 
@@ -231,7 +241,8 @@ Set in the compose file's `environment` list; all optional.
 
 Measured on real page photos: about 65 MB of memory at rest, about 180 MB at most while reading a page
 (one page at a time; Tesseract itself about 70 MB, at another moment), 3 to 5 seconds per page, one core.
-The compose file caps the app at 512 MB.
+An export is made one at a time, never while a page is being read: a PDF of 3,000 quotes takes about
+2 seconds and 280 MB more memory, a Word file about 3 seconds. The compose file caps the app at 512 MB.
 
 ## Tests
 

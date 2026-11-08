@@ -53,6 +53,7 @@ const ICONS = {
   class: 'M3 4h18v12H3zM9 20l2-4M15 20l-2-4M7 8h7M7 11h4',
   said: 'M4 5h16v11h-9l-5 4v-4H4z',
   inbox: 'M4 13h4l2 3h4l2-3h4M4 13l2-8h12l2 8v6H4z',
+  download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
 };
 function icon(name, size = 18) {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -2748,6 +2749,9 @@ async function viewSettings() {
   const el = h('div', {},
     h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Settings'))),
     h('div', { class: 'pad settings-page' },
+      h('h2', { class: 'section-title', text: 'Export' }),
+      h('p', {}, 'Your quotes and notes in a PDF or Word file, by author, by topic or by source, with a table of contents you can tap.'),
+      h('a', { class: 'btn', href: '#/export', style: { alignSelf: 'flex-start' } }, icon('download'), 'Export…'),
       accountSection(me, accounts),
       h('h2', { class: 'section-title', text: 'Backups' }),
       table([
@@ -2839,6 +2843,185 @@ function buildShell() {
   put(document.body, h('div', { class: 'app', id: 'app' }, side, main, tabbar));
 }
 
+// ----- exporting quotes and notes as a PDF or a Word file -----
+
+const EXPORT_BY = {
+  author: { all: 'All authors', search: 'Search an author', word: 'author', none: 'No author has quotes or notes yet.' },
+  topic: { all: 'All topics', search: 'Search a topic', word: 'topic', none: 'No topic has quotes or notes yet.' },
+  source: { all: 'All sources', search: 'Search a source', word: 'source', none: 'No source has quotes or notes yet.' },
+};
+
+async function viewExport() {
+  const choices = await api('/api/export/choices');
+  nav.label('Export');
+  const kept = prefs.get('export', {});
+  // format, way of organising and content are remembered; what you pick is not
+  const st = {
+    format: kept.format === 'docx' ? 'docx' : 'pdf',
+    by: EXPORT_BY[kept.by] ? kept.by : 'author',
+    quotes: kept.quotes ?? true, notes: kept.notes ?? true, bibliography: kept.bibliography ?? true,
+    picked: { author: new Set(), topic: new Set(), source: new Set() },
+    all: { author: false, topic: false, source: false },
+    said: false, search: '', kind: '',
+  };
+  const keep = () => prefs.set('export', { format: st.format, by: st.by, quotes: st.quotes, notes: st.notes, bibliography: st.bibliography });
+  const lists = { author: choices.authors, topic: choices.topics, source: choices.sources };
+  const kindWord = (k) => KINDS[k]?.label || (KINDS[k] || KINDS.other).name.toLowerCase();
+  const counts = (x) => [x.quotes ? plural(x.quotes, 'quote') : null, x.notes ? plural(x.notes, 'note') : null];
+  const describe = {
+    author: (a) => {
+      const kinds = Object.entries(a.works);
+      const total = kinds.reduce((n, [, c]) => n + c, 0);
+      const works = !total ? null : kinds.length > 1 ? plural(total, 'work')
+        : total === 1 ? `1 ${kindWord(kinds[0][0])}` : `${total} ${KINDS[kinds[0][0]].several}`;
+      return [works, ...counts(a)].filter(Boolean).join(' · ');
+    },
+    topic: (t) => [t.sources ? plural(t.sources, 'source') : null, ...counts(t)].filter(Boolean).join(' · '),
+    source: (s) => [s.by.join(', '), s.kind === 'book' || s.kind === 'ebook' ? null : kindWord(s.kind), s.year, ...counts(s)]
+      .filter(Boolean).join(' · '),
+  };
+  const title = { author: (a) => a.name, topic: (t) => t.name, source: (s) => s.title };
+
+  const chosen = () => st.all[st.by] || st.picked[st.by].size > 0 || (st.by === 'source' && st.said);
+  const payload = () => ({
+    format: st.format, by: st.by, all: st.all[st.by], ids: st.all[st.by] ? [] : [...st.picked[st.by]],
+    said: st.by === 'source' && (st.all.source || st.said), quotes: st.quotes, notes: st.notes, bibliography: st.bibliography,
+  });
+
+  const countEl = h('span', { class: 'count' });
+  const chooseHead = h('div', { class: 'section-head' }, h('h2', {}, h('span', { class: 'num-sec', text: 3 }), 'Choose'), countEl);
+  const kindsBox = h('div');
+  const listEl = h('div', { class: 'pick-list' });
+  const sumEl = h('span', { class: 'sum', role: 'status' });
+  const goBtn = h('button', { type: 'button', class: 'btn primary big' });
+  const readyBox = h('div', { class: 'ready' });
+
+  const searchInput = h('input', { type: 'search', 'aria-label': EXPORT_BY[st.by].search, placeholder: EXPORT_BY[st.by].search,
+    oninput: () => { st.search = searchInput.value; drawList(); } });
+
+  function row(cls, label, meta, checked, disabled, onchange, italic) {
+    return h('label', { class: `pick-row ${cls}` },
+      h('input', { type: 'checkbox', checked, disabled, onchange: (ev) => onchange(ev.target.checked) }),
+      h('span', { class: 'pick-body' }, h('span', { class: italic ? 'it' : '' }, label), meta ? h('span', { class: 'pick-meta', text: meta }) : null));
+  }
+
+  function drawList() {
+    const by = st.by;
+    const all = lists[by];
+    const q = fold(st.search.trim());
+    const shown = all.filter((x) => (!st.kind || x.kind === st.kind)
+      && (!q || fold(title[by](x)).includes(q) || (x.by && fold(x.by.join(' ')).includes(q))));
+    const picked = st.picked[by];
+    const n = st.all[by] ? all.length + (by === 'source' && choices.said ? 1 : 0) : picked.size + (by === 'source' && st.said ? 1 : 0);
+    const total = all.length + (by === 'source' && choices.said ? 1 : 0);
+    countEl.textContent = total ? `${n} of ${total}` : '';
+    if (!total) { put(listEl, h('p', { class: 'empty', text: EXPORT_BY[by].none })); return; }
+    put(listEl,
+      row('all', [EXPORT_BY[by].all, h('span', { class: 'n', text: total })], null, st.all[by], false, (on) => { st.all[by] = on; changed(); }),
+      shown.map((x) => row('', title[by](x), describe[by](x), st.all[by] || picked.has(x.id), st.all[by], (on) => {
+        if (on) picked.add(x.id); else picked.delete(x.id);
+        changed();
+      }, by === 'source')),
+      by === 'source' && choices.said && !st.kind && (!q || fold('Said, with no source').includes(q))
+        ? row('', 'Said, with no source', `what people said · ${plural(choices.said, 'quote')}`, st.all.source || st.said, st.all.source,
+          (on) => { st.said = on; changed(); }, true) : null,
+      shown.length || !q ? null : h('p', { class: 'empty', text: 'Nothing matches.' }));
+  }
+
+  function drawKinds() {
+    if (st.by !== 'source') { put(kindsBox); return; }
+    const present = {};
+    for (const s of choices.sources) present[s.kind] = (present[s.kind] || 0) + 1;
+    const kinds = Object.keys(KINDS).filter((k) => present[k]);
+    put(kindsBox, kinds.length > 1 ? filterRow([['', 'all'], ...kinds.map((k) => [k, `${KINDS[k].several} ${present[k]}`])], st.kind,
+      (k) => { st.kind = k; drawList(); }) : null);
+  }
+
+  const updateSummary = debounce(async () => {
+    if (!chosen() || !(st.quotes || st.notes)) return;
+    const asked = JSON.stringify(payload());
+    try {
+      const c = await api('/api/export/summary', { method: 'POST', body: payload() });
+      if (asked !== JSON.stringify(payload())) return;            // changed meanwhile
+      sumEl.textContent = [plural(c.chapters, EXPORT_BY[st.by].word), plural(c.quotes, 'quote'), plural(c.notes, 'note')].join(' · ');
+      goBtn.disabled = c.chapters === 0;
+    } catch { /* the button still works, and says what is wrong */ }
+  }, 250);
+
+  function drawButton() {
+    goBtn.hidden = false;
+    put(goBtn, icon('download'), st.format === 'pdf' ? 'Download the PDF' : 'Download the Word file');
+    goBtn.disabled = !(chosen() && (st.quotes || st.notes));
+  }
+
+  function drawGo() {
+    const ok = chosen() && (st.quotes || st.notes);
+    sumEl.textContent = !chosen() ? 'Choose at least one.' : !(st.quotes || st.notes) ? 'Choose quotes, notes, or both.' : '…';
+    drawButton();
+    if (ok) updateSummary();
+  }
+
+  function changed() { put(readyBox); drawList(); drawGo(); }
+
+  goBtn.addEventListener('click', async () => {
+    goBtn.disabled = true;
+    put(goBtn, 'Preparing…');
+    put(readyBox);
+    let ready = false;
+    try {
+      const made = await api('/api/export', { method: 'POST', body: payload() });
+      ready = true;
+      if (navigator.standalone === true) {
+        // the iPhone app hands the file to Safari, which shows it and can share it or save it (its login is separate,
+        // and the link needs none); a tap is needed, so the button becomes that link until something changes
+        goBtn.hidden = true;
+        put(readyBox,
+          h('a', { class: 'btn primary big', href: made.url, target: '_blank', rel: 'noopener' }, icon('external'),
+            st.format === 'pdf' ? 'Open the PDF' : 'Open the Word file'),
+          h('p', { class: 'note-line', text: 'Opens in Safari, where you can share it or save it to Files.' }));
+      } else {
+        const a = h('a', { href: made.url, download: made.name, hidden: true });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        put(readyBox, h('p', { class: 'ready-name' }, `Ready (${size(made.size)}) · `,
+          h('a', { href: made.url, download: made.name }, 'Download again')));
+      }
+    } catch (err) {
+      put(readyBox, h('div', { class: 'error', role: 'alert', text: err.message }));
+    } finally {
+      if (!ready || navigator.standalone !== true) drawButton();
+    }
+  });
+
+  const check = (key, label, extra) => h('label', { class: 'pick-row plain' },
+    h('input', { type: 'checkbox', checked: st[key], onchange: (ev) => { st[key] = ev.target.checked; keep(); changed(); } }),
+    h('span', {}, label, extra ? h('span', { class: 'pick-meta inline', text: extra }) : null));
+
+  const el = h('div', { class: 'export-page' },
+    bar(backButton('settings', 'Settings'), 'Export', null),
+    h('header', { class: 'top' }, h('h1', {}, 'Export'), h('p', { class: 'muted it', text: 'Your quotes and notes, gathered in one file.' })),
+    sectionHead(1, 'Format'),
+    h('div', { class: 'pick-pad' }, segmented('Format', [['pdf', 'PDF'], ['docx', 'Word']], st.format, (f) => { st.format = f; keep(); changed(); })),
+    sectionHead(2, 'Organise by'),
+    h('div', { class: 'pick-pad' }, segmented('Organise by', [['author', 'Authors'], ['topic', 'Topics'], ['source', 'Sources']], st.by, (b) => {
+      st.by = b; st.search = ''; st.kind = ''; searchInput.value = '';
+      searchInput.placeholder = EXPORT_BY[b].search;
+      searchInput.setAttribute('aria-label', EXPORT_BY[b].search);
+      keep(); drawKinds(); changed();
+    })),
+    chooseHead,
+    h('div', { class: 'pick-pad' }, kindsBox, h('label', { class: 'search' }, icon('search'), searchInput)),
+    listEl,
+    sectionHead(4, 'Content'),
+    h('div', { class: 'pick-list' },
+      check('quotes', 'Quotes', 'with your comments'), check('notes', 'Notes'), check('bibliography', 'Bibliography at the end')),
+    h('div', { class: 'export-go' }, sumEl, goBtn, readyBox));
+  drawKinds();
+  changed();
+  return { el, nav: 'settings' };
+}
+
 const ROUTES = [
   [/^$/, viewLibrary, true],
   [/^login$/, viewLogin, true],
@@ -2860,6 +3043,7 @@ const ROUTES = [
   [/^capture$/, viewCapture, (params) => ![...params.keys()].length],
   [/^inbox$/, viewInbox, true],
   [/^settings$/, viewSettings, true],
+  [/^export$/, viewExport],
   // addresses of earlier versions, from bookmarks or the home screen
   [/^entries$/, ({ params }) => { nav.replace(`quotes${params.toString() ? '?' + params : ''}`); return null; }],
   [/^book\/(\d+)$/, ({ args: [id] }) => { nav.replace(`source/${id}`); return null; }],
