@@ -143,29 +143,27 @@ def archive(db_path: Path, data_dir: Path, folders: tuple[str, ...]) -> Iterator
         copy.unlink(missing_ok=True)
 
 
-def start_maintenance(db_path: Path, backups_dir: Path, hour: int, keep: int, monthly: int,
-                      hourly: Callable[[], object] | None = None) -> None:
-    """Background loop: a database copy every night at `hour`, and `hourly()` once an hour."""
+def start_maintenance(libraries: Callable[[], list], hour: int, keep: int, monthly: int) -> None:
+    """Background loop over every account's library: a database copy every night at `hour`, and the photos
+    no quote uses removed once an hour."""
+    def each(what: str, action: Callable) -> None:
+        for lib in libraries():
+            try:
+                action(lib)
+            except Exception:  # keep the app running whatever happens
+                log.exception("%s failed for library %s", what, lib.account_id)
+
     def loop() -> None:
-        try:
-            compress_old_copies(backups_dir)
-        except Exception:
-            log.exception("Could not compress older backups")
+        each("Compressing older backups", lambda lib: compress_old_copies(lib.settings.backups_dir))
         last_hourly = 0.0
         while True:
             now = datetime.now()
-            today = backups_dir / f"marginote-{now:%Y-%m-%d}.zip"
-            if now.hour == hour and not today.exists():
-                try:
-                    snapshot(db_path, backups_dir, keep, monthly)
-                except Exception:  # keep the app running whatever happens
-                    log.exception("Nightly backup failed")
-            if hourly and time.monotonic() - last_hourly >= 3600:
+            if now.hour == hour:
+                each("Nightly backup", lambda lib: (lib.settings.backups_dir / f"marginote-{now:%Y-%m-%d}.zip").exists()
+                     or snapshot(lib.settings.db_path, lib.settings.backups_dir, keep, monthly))
+            if time.monotonic() - last_hourly >= 3600:
                 last_hourly = time.monotonic()
-                try:
-                    hourly()
-                except Exception:
-                    log.exception("Hourly maintenance failed")
+                each("Hourly cleaning", lambda lib: lib.files.clean_unused_photos())
             time.sleep(300)
 
     threading.Thread(target=loop, name="maintenance", daemon=True).start()

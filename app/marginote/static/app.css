@@ -530,3 +530,13 @@ pre.code { margin: 0; padding: 10px 12px; background: var(--tint); font-family: 
   .cover.large { width: 140px; height: 210px; }
   .photo-scroll { min-height: 0; }
 }
+
+/* ---------- accounts ---------- */
+.settings-page .inline-form { display: flex; align-items: flex-end; gap: 12px; }
+.settings-page .inline-form .grow { flex: 1; min-width: 0; }
+.settings-page .stack-form { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+.settings-page .field > .label { display: block; margin-bottom: 6px; }
+.account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 0; border-bottom: 0.6px solid var(--rule); }
+.account-row .grow { flex: 1; min-width: 160px; display: flex; flex-direction: column; }
+.account-row .inline-form { flex: 1 1 260px; }
+.login .lang-switch { align-self: center; margin-top: 8px; color: var(--grey); }

@@ -97,7 +97,8 @@ def source_dicts(conn, rows) -> list[dict]:
             "people": {role: roles.get(role, []) for role in db.ROLES},
             "topics": topics.get(r["id"], []),
             "has_cover": bool(r["cover"]),
-            "cover_url": f"/api/sources/{r['id']}/cover?v={quote(r['updated_at'])}" if r["cover"] else None,
+            "cover_url": f"/api/sources/{r['id']}/cover?v={quote(r['updated_at'])}&l={getattr(conn, 'library', '')}"
+            if r["cover"] else None,
             "quote_count": r["quote_count"],
             "note_count": r["note_count"],
             "last_entry_at": r["last_entry_at"],

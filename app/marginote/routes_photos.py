@@ -16,7 +16,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from . import db, ocr
-from .context import Context
+from .context import Context, Library
 from .files import INBOX
 from .views import load_photo, load_source
 
@@ -66,14 +66,15 @@ def read_photo(ctx: Context, data: bytes) -> tuple[bytes, int, int, list, str | 
 
 
 def start_reader(ctx: Context) -> None:
-    """Photos sent to the inbox are read here, in the background, so the phone can send several and close."""
-    def read_queued(photo_id: str) -> None:
-        conn = ctx.connect()
+    """Photos sent to the inbox are read here, in the background, so the phone can send several and close.
+    One photo at a time, whoever sent it; each is written back to its own library."""
+    def read_queued(lib: Library, photo_id: str) -> None:
+        conn = lib.connect()
         try:
             row = conn.execute("SELECT * FROM photos WHERE id = ?", (photo_id,)).fetchone()
             if not row or row["status"] != "reading":
                 return
-            source = ctx.files.photos / row["path"]
+            source = lib.files.photos / row["path"]
             try:
                 stored, width, height, words, page = read_photo(ctx, source.read_bytes())
             except (*BAD_IMAGE, pytesseract.TesseractError):
@@ -82,41 +83,42 @@ def start_reader(ctx: Context) -> None:
                 conn.commit()
                 return
             rel = Path(INBOX) / f"{photo_id}{ocr.PHOTO_SUFFIX}"
-            (ctx.files.photos / rel).write_bytes(stored)
+            (lib.files.photos / rel).write_bytes(stored)
             conn.execute(
                 "UPDATE photos SET path = ?, width = ?, height = ?, words = ?, detected_page = ?, status = 'ready' "
                 "WHERE id = ?",
                 (rel.as_posix(), width, height, db.pack_words(ocr.words_to_dicts(words)), page, photo_id),
             )
             conn.commit()
-            if source != ctx.files.photos / rel:
+            if source != lib.files.photos / rel:
                 source.unlink(missing_ok=True)
         finally:
             conn.close()
 
     def loop() -> None:
         while True:
-            photo_id = ctx.reader_queue.get()
-            if photo_id is None:
+            item = ctx.reader_queue.get()
+            if item is None:
                 return
             try:
-                read_queued(photo_id)
+                read_queued(*item)
             except Exception:
                 log.exception("Reading a photo from the inbox failed")
 
     threading.Thread(target=loop, name="photo-reader", daemon=True).start()
-    conn = ctx.connect()
-    try:   # photos sent before a restart and not read yet
-        for row in conn.execute("SELECT id FROM photos WHERE status = 'reading' ORDER BY created_at"):
-            ctx.reader_queue.put(row["id"])
-    finally:
-        conn.close()
+    for lib in ctx.libraries():   # photos sent before a restart and not read yet
+        conn = lib.connect()
+        try:
+            for row in conn.execute("SELECT id FROM photos WHERE status = 'reading' ORDER BY created_at"):
+                ctx.reader_queue.put((lib, row["id"]))
+        finally:
+            conn.close()
 
 
 def router(ctx: Context) -> APIRouter:
     api = APIRouter(dependencies=ctx.auth, tags=["photos"])
     get_db = ctx.get_db
-    photos_dir = ctx.files.photos
+    current = Depends(ctx.require_library)
 
     def photo_dict(row: sqlite3.Row) -> dict:
         words = ocr.words_from_dicts(db.unpack_words(row["words"]))
@@ -140,6 +142,7 @@ def router(ctx: Context) -> APIRouter:
         later: bool = Query(False, description="Put it in the inbox, read it in the background, sort it later"),
         source_id: int | None = Query(None, description="The source it comes from"),
         conn: sqlite3.Connection = Depends(get_db),
+        lib: Library = current,
     ):
         """Send a photo of a page (or a screenshot). Returns every word read, with its position, and the page
         number if found.
@@ -168,14 +171,14 @@ def router(ctx: Context) -> APIRouter:
             except BAD_IMAGE:
                 raise HTTPException(415, "This file is not an image the app can read")
             rel = Path(INBOX) / f"{photo_id}.upload"
-            (photos_dir / rel).write_bytes(data)
+            (lib.files.photos / rel).write_bytes(data)
             conn.execute(
                 "INSERT INTO photos (id, path, width, height, sha256, words, created_at, source_id, queued, status) "
                 "VALUES (?, ?, 0, 0, ?, NULL, ?, ?, 1, 'reading')",
                 (photo_id, rel.as_posix(), sha, db.now(), source_id),
             )
             conn.commit()
-            ctx.reader_queue.put(photo_id)
+            ctx.reader_queue.put((lib, photo_id))
             return photo_dict(load_photo(conn, photo_id))
         try:
             stored, width, height, words, page = read_photo(ctx, data)
@@ -185,7 +188,7 @@ def router(ctx: Context) -> APIRouter:
             log.exception("Tesseract failed")
             raise HTTPException(500, "Text recognition failed on this photo; try taking it again")
         rel = Path(INBOX) / f"{photo_id}{ocr.PHOTO_SUFFIX}"
-        (photos_dir / rel).write_bytes(stored)
+        (lib.files.photos / rel).write_bytes(stored)
         conn.execute(
             "INSERT INTO photos (id, path, width, height, sha256, words, detected_page, created_at, source_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -219,7 +222,7 @@ def router(ctx: Context) -> APIRouter:
         return photo_dict(load_photo(conn, photo_id))
 
     @api.delete("/api/photos/{photo_id}")
-    def delete_photo(photo_id: str, conn: sqlite3.Connection = Depends(get_db)):
+    def delete_photo(photo_id: str, conn: sqlite3.Connection = Depends(get_db), lib: Library = current):
         """Delete a photo no quote uses (from the inbox, for example)."""
         row = load_photo(conn, photo_id)
         used = conn.execute("SELECT COUNT(*) FROM entries WHERE photo_id = ?", (photo_id,)).fetchone()[0]
@@ -227,7 +230,7 @@ def router(ctx: Context) -> APIRouter:
             raise HTTPException(409, f"This photo is used by {used} saved quote(s); delete them first")
         conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
         conn.commit()
-        (photos_dir / row["path"]).unlink(missing_ok=True)
+        (lib.files.photos / row["path"]).unlink(missing_ok=True)
         return {"deleted": photo_id}
 
     @api.get("/api/photos/{photo_id}")
@@ -236,16 +239,16 @@ def router(ctx: Context) -> APIRouter:
 
     @api.get("/api/photos/{photo_id}/image")
     def photo_image(photo_id: str, width: int | None = Query(None, ge=64, le=1200, description="A smaller copy"),
-                    conn: sqlite3.Connection = Depends(get_db)):
+                    conn: sqlite3.Connection = Depends(get_db), lib: Library = current):
         row = load_photo(conn, photo_id)
-        path = photos_dir / row["path"]
+        path = lib.files.photos / row["path"]
         if not path.is_file():
             raise HTTPException(404, "The photo file is missing from the photos folder")
         ready = row["status"] == "ready"
         headers = PHOTO_CACHE if ready else {"Cache-Control": "no-store"}
         if width is None and path.suffix in PHOTO_TYPES:
             return FileResponse(path, media_type=PHOTO_TYPES[path.suffix], headers=headers)
-        key = (photo_id, width, row["status"])
+        key = (lib.account_id, photo_id, width, row["status"])   # never one library's picture for another
         with THUMB_SLOT:
             if key in THUMBS:
                 THUMBS.move_to_end(key)

@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from . import backup, linkinfo, lookup, names, ocr
-from .context import Context
+from .context import Context, Library
 from .routes_photos import BAD_IMAGE, MAX_UPLOAD, OCR_SLOT
 
 
@@ -92,35 +92,35 @@ def router(ctx: Context) -> APIRouter:
     # ----- backups -----
 
     @api.get("/api/backup/status", tags=["status"])
-    def backup_status():
-        """The database copies, when the next one is made, and how much space everything takes."""
+    def backup_status(lib: Library = Depends(ctx.require_library)):
+        """Your library's database copies, when the next one is made, and how much space it takes."""
         now = datetime.now().astimezone()
-        done_today = (settings.backups_dir / f"marginote-{now:%Y-%m-%d}.zip").exists()
+        done_today = (lib.settings.backups_dir / f"marginote-{now:%Y-%m-%d}.zip").exists()
         next_run = now.replace(hour=settings.backup_hour, minute=0, second=0, microsecond=0)
         if done_today or now.hour > settings.backup_hour:
             next_run += timedelta(days=1)
         return {
-            "copies": backup.list_backups(settings.backups_dir),
+            "copies": backup.list_backups(lib.settings.backups_dir),
             "kept": settings.backups_kept,
             "monthly": settings.backups_monthly,
             "next": next_run.isoformat(timespec="minutes"),
-            **ctx.files.usage(),
+            **lib.files.usage(),
         }
 
     @api.get("/api/backup/download", tags=["status"])
-    def backup_download():
-        """Everything in one zip: a consistent copy of the database, the page photos and the covers."""
+    def backup_download(lib: Library = Depends(ctx.require_library)):
+        """Your whole library in one zip: a consistent copy of its database, its page photos and covers."""
         name = f"marginote-{datetime.now():%Y-%m-%d}.zip"
         return StreamingResponse(
-            backup.archive(settings.db_path, settings.data_dir, ("photos", "covers")),
+            backup.archive(lib.settings.db_path, lib.settings.data_dir, ("photos", "covers")),
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{name}"'},
         )
 
     @api.post("/api/backup", tags=["status"])
-    def backup_now():
-        """Make a copy of the database in data/backups/ now (one is also made every night)."""
-        path = backup.snapshot(settings.db_path, settings.backups_dir, settings.backups_kept, settings.backups_monthly)
+    def backup_now(lib: Library = Depends(ctx.require_library)):
+        """Make a copy of your library's database now (one is also made every night)."""
+        path = backup.snapshot(lib.settings.db_path, lib.settings.backups_dir, settings.backups_kept, settings.backups_monthly)
         return {"file": path.name}
 
     return api

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from . import db, ocr
-from .context import Context
+from .context import Context, Library
 from .views import ENTRY_SQL, entry_dict, entry_dicts, entries_where, load_photo, load_source
 
 Medium = Literal["book", "ebook", "article", "video", "podcast", "class", "talk", "other", "said"]
@@ -83,7 +83,7 @@ def router(ctx: Context) -> APIRouter:
         return None if pid in makers else pid
 
     @api.post("/api/entries", status_code=201)
-    def create_entry(body: EntryIn, conn: sqlite3.Connection = Depends(get_db)):
+    def create_entry(body: EntryIn, conn: sqlite3.Connection = Depends(get_db), lib: Library = Depends(ctx.require_library)):
         if body.source_id is not None:
             load_source(conn, body.source_id)
         elif body.photo_id:
@@ -114,7 +114,7 @@ def router(ctx: Context) -> APIRouter:
             db.set_entry_topics(conn, entry_id, body.topics)
         db.reindex_entry(conn, entry_id)
         if body.photo_id:
-            ctx.files.file_photo(conn, body.photo_id, body.source_id, page)
+            lib.files.file_photo(conn, body.photo_id, body.source_id, page)
         conn.commit()
         return entry_dict(conn, entry_id)
 
@@ -157,7 +157,8 @@ def router(ctx: Context) -> APIRouter:
                 "notes": [{"id": n["id"], "title": n["title"] or n["text"][:60]} for n in notes]}
 
     @api.patch("/api/entries/{entry_id}")
-    def update_entry(entry_id: int, body: EntryPatch, conn: sqlite3.Connection = Depends(get_db)):
+    def update_entry(entry_id: int, body: EntryPatch, conn: sqlite3.Connection = Depends(get_db),
+                     lib: Library = Depends(ctx.require_library)):
         row = conn.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
         if row is None:
             raise HTTPException(404, "No quote with this id")
@@ -183,7 +184,7 @@ def router(ctx: Context) -> APIRouter:
                 load_source(conn, new_source)
                 db.keep_entry_links(conn, entry_id, new_source)
                 if row["photo_id"]:
-                    ctx.files.move_photo_to_source(conn, row["photo_id"], new_source, changes.get("page", row["page"]))
+                    lib.files.move_photo_to_source(conn, row["photo_id"], new_source, changes.get("page", row["page"]))
                 source_id = new_source
         range_changed = {"word_start", "word_end"} & changes.keys()
         if range_changed and "text" not in changes and row["photo_id"]:

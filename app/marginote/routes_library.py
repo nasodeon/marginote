@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from . import db, linkinfo, lookup, names
-from .context import Context
+from .context import Context, Library
 from .views import (SOURCE_LIST_SQL, entries_where, load_note, load_person, load_source, load_topic, note_dict,
                     note_dicts, people_by_id, person_brief, source_dict, source_dicts)
 
@@ -115,7 +115,7 @@ def check_date(value: str | None) -> str | None:
 def router(ctx: Context) -> APIRouter:
     api = APIRouter(dependencies=ctx.auth)
     get_db = ctx.get_db
-    files = ctx.files
+    current = Depends(ctx.require_library)
     settings = ctx.settings
 
     def person_or_422(conn, ref):
@@ -133,7 +133,7 @@ def router(ctx: Context) -> APIRouter:
                 person_or_422(conn, ref)
         db.set_source_people(conn, source_id, clean)
 
-    def fetch_cover_in_background(source_id: int, row: dict, cover_url: str | None) -> None:
+    def fetch_cover_in_background(lib: Library, source_id: int, row: dict, cover_url: str | None) -> None:
         try:
             image = None
             if cover_url:
@@ -142,10 +142,10 @@ def router(ctx: Context) -> APIRouter:
                 image = lookup.find_cover(row.get("isbn"), row["title"], row.get("first_author"))
             if not image:
                 return
-            conn = ctx.connect()
+            conn = lib.connect()
             try:
                 if conn.execute("SELECT 1 FROM sources WHERE id = ?", (source_id,)).fetchone():
-                    files.save_cover(conn, source_id, image)
+                    lib.files.save_cover(conn, source_id, image)
                     conn.commit()
             finally:
                 conn.close()
@@ -168,7 +168,8 @@ def router(ctx: Context) -> APIRouter:
         return source_dicts(conn, rows)
 
     @api.post("/api/sources", tags=["sources"], status_code=201)
-    def create_source(body: SourceIn, background: BackgroundTasks, conn: sqlite3.Connection = Depends(get_db)):
+    def create_source(body: SourceIn, background: BackgroundTasks, conn: sqlite3.Connection = Depends(get_db),
+            lib: Library = current):
         """Saved at once; a cover is looked for afterwards, so you never wait for it."""
         values = {k: blank_to_none(getattr(body, k)) for k in ("kind", "title", "subtitle", "publisher", "edition",
                                                               "year", "isbn", "url", "language", "field")}
@@ -197,7 +198,7 @@ def router(ctx: Context) -> APIRouter:
         cover_pending = settings.lookups_enabled and (
             bool(body.cover_url) or (body.fetch_cover and values["kind"] in ("book", "ebook")))
         if cover_pending:
-            background.add_task(fetch_cover_in_background, source_id,
+            background.add_task(fetch_cover_in_background, lib, source_id,
                                 {**values, "first_author": first_author(conn, source_id)}, body.cover_url)
         return {**source_dict(conn, source_id), "cover_pending": cover_pending}
 
@@ -206,7 +207,8 @@ def router(ctx: Context) -> APIRouter:
         return source_dict(conn, source_id)
 
     @api.patch("/api/sources/{source_id}", tags=["sources"])
-    def update_source(source_id: int, body: SourcePatch, conn: sqlite3.Connection = Depends(get_db)):
+    def update_source(source_id: int, body: SourcePatch, conn: sqlite3.Connection = Depends(get_db),
+            lib: Library = current):
         old = load_source(conn, source_id)
         changes = body.model_dump(exclude_unset=True)
         people = changes.pop("people", None)
@@ -231,7 +233,7 @@ def router(ctx: Context) -> APIRouter:
             sets = ", ".join(f"{k} = ?" for k in changes)
             conn.execute(f"UPDATE sources SET {sets}, updated_at = ? WHERE id = ?", (*changes.values(), db.now(), source_id))
             if "title" in changes:
-                files.rename_source_folder(conn, source_id, old["title"], changes["title"])
+                lib.files.rename_source_folder(conn, source_id, old["title"], changes["title"])
         if people is not None:
             set_people(conn, source_id, people)
         if topics is not None:
@@ -245,7 +247,8 @@ def router(ctx: Context) -> APIRouter:
         return source_dict(conn, source_id)
 
     @api.delete("/api/sources/{source_id}", tags=["sources"])
-    def delete_source(source_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    def delete_source(source_id: int, conn: sqlite3.Connection = Depends(get_db),
+            lib: Library = current):
         """Deletes the source with all its quotes (their photos go with the hourly cleanup). Your notes on it
         are kept."""
         row = load_source(conn, source_id)
@@ -257,7 +260,7 @@ def router(ctx: Context) -> APIRouter:
         db.forget_unused_people(conn)
         db.forget_unused_topics(conn)
         conn.commit()
-        files.remove_cover(row["cover"])
+        lib.files.remove_cover(row["cover"])
         return {"deleted": source_id}
 
     @api.get("/api/sources/{source_id}/entries", tags=["sources"])
@@ -267,28 +270,31 @@ def router(ctx: Context) -> APIRouter:
                              order=PAGE_ORDER if order == "page" else "e.created_at DESC, e.id DESC")
 
     @api.get("/api/sources/{source_id}/cover", tags=["sources"])
-    def get_cover(source_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    def get_cover(source_id: int, conn: sqlite3.Connection = Depends(get_db),
+            lib: Library = current):
         row = load_source(conn, source_id)
-        path = files.covers / row["cover"] if row["cover"] else None
+        path = lib.files.covers / row["cover"] if row["cover"] else None
         if not path or not path.is_file():
             raise HTTPException(404, "No cover yet")
         media = "image/webp" if path.suffix == ".webp" else "image/jpeg"
         return FileResponse(path, media_type=media, headers=COVER_CACHE)
 
     @api.post("/api/sources/{source_id}/cover", tags=["sources"])
-    def upload_cover(source_id: int, file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_db)):
+    def upload_cover(source_id: int, file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_db),
+            lib: Library = current):
         """Use your own photo of the cover."""
         load_source(conn, source_id)
         data = file.file.read(MAX_UPLOAD + 1)
         try:
-            files.save_cover(conn, source_id, data)
+            lib.files.save_cover(conn, source_id, data)
         except (OSError, ValueError):
             raise HTTPException(415, "This file is not an image the app can read")
         conn.commit()
         return source_dict(conn, source_id)
 
     @api.post("/api/sources/{source_id}/cover/fetch", tags=["sources"])
-    def fetch_cover(source_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    def fetch_cover(source_id: int, conn: sqlite3.Connection = Depends(get_db),
+            lib: Library = current):
         """Look for a cover online again: by ISBN, then by title and author; for a link, its picture."""
         row = load_source(conn, source_id)
         if not settings.lookups_enabled:
@@ -304,7 +310,7 @@ def router(ctx: Context) -> APIRouter:
             image = lookup.find_cover(row["isbn"], row["title"], first_author(conn, source_id))
         if not image:
             raise HTTPException(404, "No picture found online; you can use your own photo")
-        files.save_cover(conn, source_id, image)
+        lib.files.save_cover(conn, source_id, image)
         conn.commit()
         return source_dict(conn, source_id)
 

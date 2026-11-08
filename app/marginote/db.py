@@ -338,10 +338,17 @@ def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+class Connection(sqlite3.Connection):
+    """A connection that knows whose library it opened: image addresses carry it, so a browser shared by two
+    people never shows one the other's cached cover."""
+    library = ""
+
+
+def connect(db_path: Path, library: str = "") -> Connection:
     # Each request gets its own connection, but the web framework may open it in one worker thread and
     # close it in another: allowed here, since a connection is never used by two requests at once.
-    conn = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
+    conn = sqlite3.connect(db_path, timeout=10, check_same_thread=False, factory=Connection)
+    conn.library = library
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA cache_size = -4000")   # 4 MB of page cache per connection is plenty here

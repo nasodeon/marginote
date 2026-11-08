@@ -39,7 +39,7 @@ source author's unless you name someone else (a quote within a quote).
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
-  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.6.1`)
+  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.7.0`)
 
 ## Install
 
@@ -47,10 +47,34 @@ source author's unless you name someone else (a quote within a quote).
 2. Create two folders on your server: `.../marginote/data` and `.../marginote/tailscale`.
 3. Paste `docker-compose.yml` into your Docker app, replace the values marked `CHANGE-ME` (and the
    folder paths if yours differ), and deploy.
-4. Open `https://marginote.<your-tailnet>.ts.net` from a device on your tailnet. On iPhone, Safari's
-   Share → Add to Home Screen opens it like an app.
+4. Open `https://marginote.<your-tailnet>.ts.net` from a device on your tailnet and log in: name `admin`
+   (or leave the name empty), password `MARGINOTE_PASSWORD`. On iPhone, Safari's Share → Add to Home
+   Screen opens it like an app.
 
 `/docs` lists every API call.
+
+## Accounts and languages
+
+You are the owner: your password is `MARGINOTE_PASSWORD`, and your library is the data folder itself.
+Your name starts as `admin`; change it in Settings.
+
+Settings › People with access adds someone: a name, a password (8 characters at least) and a language.
+Each person gets a library of their own, in `data/users/<id>/` (database, photos, covers, backups), and
+nothing in the app reads one library from another: not the lists, not the search, not the photos, not the
+backups or the download. Not even the owner can see another person's library in the app (as owner of the
+NAS, you can still open their files there). Each person changes their own password in Settings; the owner
+can set a new one for someone who forgot theirs. Removing someone stops their logins and sets their
+library aside in `data/users/removed/`.
+
+The app is still reachable only through your tailnet. To let someone in without giving them your whole
+network, share only the `marginote` machine with them: in the Tailscale admin console, Machines › the
+`marginote` row › ⋯ › Share. They accept with their own Tailscale account and reach the app at the same
+address, and nothing else of yours.
+
+Each person picks French or English in Settings; the login page follows the browser, and its link at the
+bottom switches. The French screens (`static/app.fr.js`) are made from the English ones (`static/app.js`)
+by `tools/translate_fr.py`: after changing `app.js`, run it, and add the French of any new text to its
+table (a test fails until the French file is up to date).
 
 ## Update
 
@@ -62,6 +86,8 @@ When an update changes the shape of the database, the app first writes a copy of
 and covers all stay.
 
 - 0.5.0: books become sources, authors become people, tags become topics.
+- 0.7.0 does not change the shape of the database. Accounts are added beside it; your library stays
+  where it is, and devices already logged in stay logged in.
 - 0.6.0: comments become notes on their source, about the same people and topics (with their page, and
   your note on the comment added below its text); a note that referred to a comment now refers to its
   source. Quotes can have no source, notes can be on sources, and classes are a new kind of source.
@@ -114,8 +140,8 @@ The shortcut opens `https://<your address>/#/capture?share=` followed by what wa
 
 ## Backups
 
-Every night (03:00 in the container's time zone, `TZ`) the app writes a consistent copy of the database to
-`data/backups/marginote-<date>.zip`. It keeps the last 14 days and the first copy of each of the last 6
+Every night (03:00 in the container's time zone, `TZ`) the app writes a consistent copy of each library's
+database to its `backups/` folder (`data/backups/marginote-<date>.zip` for yours). It keeps the last 14 days and the first copy of each of the last 6
 months; copies made before an upgrade are never removed. Settings shows the copies and the space used, makes
 a copy on demand, and downloads everything as one zip (database, photos, covers).
 
@@ -136,6 +162,8 @@ data/
   photos/<Title> (<id>)/        a source's page photos, named after their page: p168 - 1a2b3c4d.webp
   covers/<id>.webp              covers and video pictures
   backups/                      database copies (zips)
+  accounts.json                 the other accounts: names, languages, scrambled passwords (scrypt)
+  users/<id>/                   another person's library: marginote.db, photos/, covers/, backups/
   secret_key                    signs the login cookie
 ```
 
@@ -172,8 +200,9 @@ Set in the compose file's `environment` list; all optional.
 - No access log: your searches and the pages you open are not written to the Docker logs.
 - The app's pages load nothing from outside (no web fonts, scripts or trackers from other sites); a
   Content-Security-Policy header enforces it. Only `/docs` loads its viewer from a public CDN.
-- The password lives only in your compose file; it is never written to the database. Changing it
-  logs every device out.
+- Your password lives only in your compose file; it is never written to the database. Changing it
+  logs every device out. The other accounts' passwords are kept scrambled (scrypt) in
+  `data/accounts.json`, never as typed; a new password logs that person out everywhere.
 
 ## Resources
 
