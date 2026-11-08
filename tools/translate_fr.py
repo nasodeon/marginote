@@ -195,24 +195,36 @@ const KINDS = {
     a = s.index("      h('h2', { class: 'section-title', text: 'Sending from other apps' }),")
     b = s.index("      h('h2', { class: 'section-title', text: 'App' }),")
     s = s[:a] + fr("""      h('h2', { class: 'section-title', text: 'Envoyer depuis d’autres apps' }),
-      h('h3', { class: 'sub-title', text: 'Sur un ordinateur : un favori' }),
-      h('p', {}, 'Faites glisser ce bouton dans votre barre de favoris, une fois. Ensuite, sélectionnez du texte sur n’importe quelle page et cliquez sur le favori : la page s’ouvre ici, avec le passage, son lien et son titre déjà remplis.'),
-      h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Faites-le glisser dans la barre des favoris'); } }, '→ Marginote'),
-      h('h3', { class: 'sub-title', text: 'Sur l’iPhone : « Marginote » dans le menu Partager de toutes les apps' }),
-      h('p', {}, 'Un raccourci, créé une fois dans l’app Raccourcis. Ensuite, sélectionnez du texte dans n’importe quelle app (Safari, Notes, Mail, Livres, un PDF…), touchez Partager, puis Marginote : l’app s’ouvre avec le passage et vous demande d’où il vient. Un lien partagé seul (YouTube, Podcasts, un article) ouvre ici son formulaire.'),
-      steps([
-        'Dans Raccourcis, touchez + (en haut à droite). Touchez le nom en haut, « Renommer », et tapez Marginote.',
-        'Touchez ⓘ (en bas, ou dans le menu sous le nom) et activez « Dans la feuille de partage » (« Afficher dans la feuille de partage » sur les iPhone plus anciens), puis OK. Une première ligne apparaît : « Recevoir … ». Touchez le mot bleu après « Recevoir », touchez « Effacer », cochez seulement « Texte » et « URL », puis OK.',
-        'Ajoutez l’action « Texte » (champ de recherche en bas). Touchez l’intérieur de son cadre, puis « Entrée du raccourci » dans la barre au-dessus du clavier.',
-        'Ajoutez l’action qui encode le texte pour une adresse : cherchez « encod » et choisissez « Encoder l’URL » (le nom peut varier un peu). Elle prend toute seule le Texte du dessus ; laissez-la sur « Encoder ».',
-        'Ajoutez l’action « URL ». Collez l’adresse ci-dessous dans son cadre puis, juste après, sans espace, touchez le résultat de l’étape d’encodage dans la barre au-dessus du clavier.',
-        'Ajoutez l’action « Ouvrir les URL », puis OK (en haut à droite).',
-      ]),
-      h('pre', { class: 'code', text: shareAddress() }),
-      copyBtn(shareAddress(), 'Copier l’adresse'),
-      h('p', { class: 'note-line', text: 'C’est bon quand : dans Notes, vous sélectionnez une phrase, touchez Partager (derrière › dans le petit menu si besoin), faites défiler jusqu’à Marginote, et l’app s’ouvre sur « D’où vient ce passage ? » avec votre phrase. La première fois, iOS demande si le raccourci peut ouvrir l’adresse : Autoriser.' }),
-      h('p', { class: 'note-line', text: 'Il s’ouvre dans Safari : connectez-vous-y une fois (l’app de l’écran d’accueil garde sa propre connexion), avec Tailscale activé. Pour avoir Marginote en haut du menu Partager : « Modifier les actions… » tout en bas, puis ajoutez-le aux Favoris.' }),
-      h('p', { class: 'note-line', text: 'Une app sans Partager dans son menu (Kindle) : copiez le passage, puis ici, Ajouter › Coller ce que vous avez copié.' }),
+      way('computer', 'Sur un ordinateur : un favori', [
+        h('p', {}, 'Faites glisser ce bouton dans votre barre de favoris, une fois. Ensuite, sélectionnez du texte sur n’importe quelle page et cliquez sur le favori : la page s’ouvre ici, avec le passage, son lien et son titre déjà remplis.'),
+        h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Faites-le glisser dans la barre des favoris'); } }, '→ Marginote')]),
+      way('iphone', 'Sur l’iPhone : « Marginote » dans le menu Partager de toutes les apps', [
+        h('p', {}, 'Un raccourci, créé une fois dans l’app Raccourcis. Ensuite, sélectionnez du texte dans n’importe quelle app (Safari, Notes, Mail, Livres, un PDF…), touchez Partager, puis Marginote : l’app s’ouvre avec le passage et vous demande d’où il vient. Un lien partagé seul (YouTube, Podcasts, un article) ouvre ici son formulaire.'),
+        steps([
+          'Dans Raccourcis, touchez + (en haut à droite). Touchez le nom en haut, « Renommer », et tapez Marginote.',
+          'Touchez ⓘ (en bas, ou dans le menu sous le nom) et activez « Dans la feuille de partage » (« Afficher dans la feuille de partage » sur les iPhone plus anciens), puis OK. Une première ligne apparaît : « Recevoir … ». Touchez le mot bleu après « Recevoir », touchez « Effacer », cochez seulement « Texte » et « URL », puis OK.',
+          'Ajoutez l’action « Texte » (champ de recherche en bas). Touchez l’intérieur de son cadre, puis « Entrée du raccourci » dans la barre au-dessus du clavier.',
+          'Ajoutez l’action qui encode le texte pour une adresse : cherchez « encod » et choisissez « Encoder l’URL » (le nom peut varier un peu). Elle prend toute seule le Texte du dessus ; laissez-la sur « Encoder ».',
+          'Ajoutez l’action « URL ». Collez l’adresse ci-dessous dans son cadre puis, juste après, sans espace, touchez le résultat de l’étape d’encodage dans la barre au-dessus du clavier.',
+          'Ajoutez l’action « Ouvrir les URL », puis OK (en haut à droite).',
+        ]),
+        h('pre', { class: 'code', text: shareAddress() }),
+        copyBtn(shareAddress(), 'Copier l’adresse'),
+        h('p', { class: 'note-line', text: 'C’est bon quand : dans Notes, vous sélectionnez une phrase, touchez Partager (derrière › dans le petit menu si besoin), faites défiler jusqu’à Marginote, et l’app s’ouvre sur « D’où vient ce passage ? » avec votre phrase. La première fois, iOS demande si le raccourci peut ouvrir l’adresse : Autoriser.' }),
+        h('p', { class: 'note-line', text: 'Il s’ouvre dans Safari : connectez-vous-y une fois (l’app de l’écran d’accueil garde sa propre connexion), avec Tailscale activé. Pour avoir Marginote en haut du menu Partager : « Modifier les actions… » tout en bas, puis ajoutez-le aux Favoris.' }),
+        h('p', { class: 'note-line', text: 'Une app sans Partager dans son menu (Kindle) : copiez le passage, puis ici, Ajouter › Coller ce que vous avez copié.' })]),
+      way('android', 'Sur Android (Samsung et autres) : « Marginote » dans le menu Partager', [
+        h('p', {}, 'Rien à créer : une fois l’app installée depuis Chrome, Android l’ajoute au menu Partager. Ensuite, sélectionnez du texte dans n’importe quelle app (Chrome, Samsung Notes, Gmail, un PDF…), touchez Partager, puis Marginote : l’app s’ouvre avec le passage et vous demande d’où il vient. Un lien partagé seul (YouTube, un article) ouvre ici son formulaire.'),
+        steps([
+          'Activez Tailscale, puis ouvrez cette adresse dans Chrome (le navigateur de Google, pas Samsung Internet) et connectez-vous.',
+          'Dans Chrome, touchez ⋮ (en haut à droite), puis « Installer l’application ». Si vous ne voyez que « Ajouter à l’écran d’accueil », touchez-le, puis « Installer ».',
+          'Confirmez. Marginote apparaît parmi vos applications, avec sa propre icône.',
+        ]),
+        h('pre', { class: 'code', text: location.origin }),
+        copyBtn(location.origin, 'Copier l’adresse'),
+        h('p', { class: 'note-line', text: 'C’est bon quand : dans Samsung Notes, vous sélectionnez une phrase, touchez Partager, et Marginote est dans la liste (parfois sous « Plus », ou au bout d’une minute) ; le toucher ouvre l’app sur « D’où vient ce passage ? » avec votre phrase.' }),
+        h('p', { class: 'note-line', text: 'L’app installée et Chrome partagent la même connexion : connectez-vous une fois. Si l’icône sur l’écran d’accueil porte un petit logo Chrome dans un coin, Chrome a créé un simple raccourci au lieu d’installer l’app, et un raccourci n’est pas dans le menu Partager : supprimez-le, puis installez à nouveau depuis ⋮.' }),
+        h('p', { class: 'note-line', text: 'Une app qui ne partage qu’un lien vers le livre (Kindle) : copiez plutôt le passage, puis ici, Ajouter › Coller ce que vous avez copié.' })]),
 """) + s[b:]
 
     # ---------- plain texts: replaced wherever they appear as a whole string ----------

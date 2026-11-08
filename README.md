@@ -39,7 +39,7 @@ source author's unless you name someone else (a quote within a quote).
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
 - `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
-  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.7.1`)
+  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.7.2`)
 
 ## Install
 
@@ -94,6 +94,7 @@ photos and covers all stay.
   database to `before-0.7.1-<date>.zip`. Each item is renamed on the same disk, so it is instant; nothing is
   overwritten (if both places hold files, the app stops and says so). The database itself is unchanged,
   and devices already logged in stay logged in.
+- 0.7.2: Android's Share menu, and the French tab names fit narrow phones. Nothing changes in the data.
 
 Do not use a one-click "update" or "recreate" button on the `marginote` container (UGOS, Portainer…): it
 shares the Tailscale container's network, and those buttons cannot rebuild such a container (Docker
@@ -103,6 +104,7 @@ answers "conflicting options: hostname and the network mode"), which leaves it d
 
 | Back to | Copy to restore | Image |
 | --- | --- | --- |
+| 0.7.1 | none: nothing changed in the data | `marginote:0.7.1` |
 | 0.6.1 | none: the database is the same | `marginote:0.6.1` |
 | 0.5.1 | `before-0.6.0-<date>.zip` | `marginote:0.5.1` |
 | 0.4.0 | `before-0.5.0-<date>.zip` | `marginote:0.4.0` |
@@ -130,10 +132,16 @@ database. The code of each version is on its branch: `release-0.4`, `release-0.5
   made in one tap); from Safari, the page's link comes along; a link shared alone (YouTube, Podcasts) opens
   its form. Settings lists the six steps (four actions: Text, URL Encode, URL, Open URLs). The shortcut
   holds no password: it opens Marginote in Safari, where you are signed in.
+- **On Android** (Samsung and others): nothing to make. Install the app from Chrome (⋮ › Install app) and
+  Android lists «Marginote» in its Share menu: select text in any app, tap Share › Marginote, and the app
+  opens with the passage, as on the iPhone. A shared page brings its link and title. Install from Chrome,
+  not Samsung Internet; an icon with a small Chrome logo is a plain shortcut, which is not in the Share menu.
 - **From an app without Share in its menu** (Kindle): copy the passage, then Capture › Paste what you
   copied.
 
-The shortcut opens `https://<your address>/#/capture?share=` followed by what was shared, URL-encoded.
+The shortcut opens `https://<your address>/#/capture?share=` followed by what was shared, URL-encoded. On
+Android the manifest's `share_target` sends it to `/share`, which hands it on to the same address; nothing
+is kept or logged on the way.
 
 ## Disk space
 

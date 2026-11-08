@@ -25,5 +25,6 @@ HEALTHCHECK --interval=60s --timeout=5s --start-period=20s \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"
 
 # Listens only inside the Tailscale container's network: not reachable from your LAN or the internet.
-# No access log: request lines would otherwise record your searches and book ids in the Docker logs.
-CMD ["uvicorn", "--factory", "marginote.main:create_app", "--host", "127.0.0.1", "--port", "8000", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
+# No access log: request lines would otherwise record your searches, book ids and shared passages in the Docker logs.
+# A passage shared from Android arrives in the address itself: allowed up to 1 MB (the default, 16 KB, cut long ones off).
+CMD ["uvicorn", "--factory", "marginote.main:create_app", "--host", "127.0.0.1", "--port", "8000", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1", "--h11-max-incomplete-event-size", "1048576"]

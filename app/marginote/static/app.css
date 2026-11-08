@@ -76,6 +76,16 @@ button { cursor: pointer; }
 .tabbar > a.on { color: var(--ink); font-weight: 700; }
 .tabbar .tab-capture { flex: 0 0 auto; padding: 0 10px 0 4px; display: flex; align-items: center; justify-content: center; }
 .tabbar .tab-capture .btn { min-height: 38px; padding: 0 12px; font-size: 16px; }
+/* narrow phones (many Android phones are 360 px wide, some 320): the French names still fit */
+@media (max-width: 400px) {
+  .tabbar > a { padding: 0 3px; letter-spacing: 0; }
+  .tabbar .tab-capture { padding: 0 8px 0 2px; }
+  .tabbar .tab-capture .btn { padding: 0 10px; }
+}
+@media (max-width: 340px) {
+  .tabbar > a { font-size: 14.5px; }
+  .tabbar .tab-capture .btn { padding: 0 8px; font-size: 15px; }
+}
 
 /* ---------- buttons and fields ---------- */
 .btn {
@@ -540,3 +550,9 @@ pre.code { margin: 0; padding: 10px 12px; background: var(--tint); font-family: 
 .account-row .grow { flex: 1; min-width: 160px; display: flex; flex-direction: column; }
 .account-row .inline-form { flex: 1 1 260px; }
 .login .lang-switch { align-self: center; margin-top: 8px; color: var(--grey); }
+
+/* settings: the ways of sending from other apps, the one for this device unfolded */
+.sub-head > .sub-title { flex: 1; }
+.settings-page .sub-head .fold-btn { margin: 6px 0 0 10px; }
+.settings-page .fold-body { display: flex; flex-direction: column; gap: 14px; }
+.settings-page .sub-head.folded { border-bottom-style: none; }

@@ -1,5 +1,6 @@
 import io
 import re
+from urllib.parse import unquote
 
 from conftest import make_page, owner
 from fastapi.testclient import TestClient
@@ -39,6 +40,37 @@ def test_app_page_files_and_docs_are_served(client):
     assert client.get("/static/fonts/cmu-serif-regular.woff2").status_code == 200
     assert client.get("/static/manifest.webmanifest").headers["content-type"].startswith("application/manifest+json")
     assert client.get("/docs").status_code == 200
+
+
+def test_android_share_menu_opens_capture_with_what_was_shared(client):
+    manifest = client.get("/static/manifest.webmanifest").json()
+    target = manifest["share_target"]
+    assert target["action"].startswith(manifest["scope"]) and target["method"] == "GET"
+    assert {"title", "text", "url"} <= set(target["params"].values())
+    for icon in manifest["icons"]:
+        assert client.get(icon["src"]).status_code == 200                     # what Chrome needs to install it
+
+    def share(**params):
+        res = client.get("/share", params=params, follow_redirects=False)
+        assert res.status_code == 303
+        return res.headers["location"]
+
+    # a passage from Samsung Notes: no login needed to be sent on, nothing kept on the way
+    passage = "Douter de tout ou tout croire, ce sont deux solutions\négalement commodes ; l'une + l'autre & 100 %"
+    location = share(text=passage)
+    assert location.startswith("/#/capture?share=") and "&title=" not in location
+    assert unquote(location.split("share=", 1)[1]) == passage                # "+", "&", "%" and new lines come through
+    # a page shared from Chrome: the link is in the text, the page's title comes along
+    location = share(title="Un article", text="https://example.org/a")
+    shared, title = location.split("share=", 1)[1].split("&title=")
+    assert unquote(shared) == "https://example.org/a" and unquote(title) == "Un article"
+    # a link given apart from the text is added to it, once
+    assert unquote(share(text="Une phrase", url="https://example.org/b").split("share=", 1)[1]) == "Une phrase\nhttps://example.org/b"
+    assert unquote(share(text="Une phrase https://example.org/b", url="https://example.org/b").split("share=", 1)[1]) \
+        == "Une phrase https://example.org/b"
+    assert share() == "/#/capture"
+    long = "Les élèves réfléchissaient à l'été. " * 400                         # a long passage is not cut
+    assert unquote(share(text=long).split("share=", 1)[1]) == long.strip()
 
 
 def test_isbn_checks_and_lookup(logged_in, monkeypatch):

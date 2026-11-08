@@ -738,10 +738,11 @@ async function viewLibrary({ params }) {
 
 const folds = {
   all() { return prefs.get('folded', {}); },
-  is(key) { return this.all()[key] === 1; },
-  set(key, folded) {
+  // a part opens unfolded, unless it starts folded (startFolded): only a change from that is kept
+  is(key, startFolded = false) { const v = this.all()[key]; return v === undefined ? startFolded : v === 1; },
+  set(key, folded, startFolded = false) {
     const all = this.all();
-    if (folded) all[key] = 1; else delete all[key];
+    if (folded !== startFolded) all[key] = folded ? 1 : 0; else delete all[key];
     const keys = Object.keys(all);
     if (keys.length > 600) for (const k of keys.slice(0, keys.length - 600)) delete all[k];   // the oldest go
     prefs.set('folded', all);
@@ -749,9 +750,9 @@ const folds = {
 };
 
 // head: the section's or group's title line (the button is added to it); body: what folds away
-function foldable(key, head, body) {
+function foldable(key, head, body, startFolded = false) {
   const box = h('div', { class: 'fold-body' }, body);
-  let folded = folds.is(key);
+  let folded = folds.is(key, startFolded);
   const btn = h('button', { type: 'button', class: 'fold-btn' });
   const apply = () => {
     box.hidden = folded;
@@ -760,7 +761,7 @@ function foldable(key, head, body) {
     btn.setAttribute('aria-label', folded ? 'Afficher cette partie' : 'Masquer cette partie');
     head.classList.toggle('folded', folded);
   };
-  btn.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); folded = !folded; folds.set(key, folded); apply(); });
+  btn.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); folded = !folded; folds.set(key, folded, startFolded); apply(); });
   head.append(btn);
   apply();
   return [head, box];
@@ -1555,7 +1556,7 @@ function parseShared(raw) {
   for (const m of text.match(/https?:\/\/[^\s<>"«»“”]+/gi) || []) {
     let host = '';
     try { host = new URL(m.replace(/[.,;:!?)\]]+$/, '')).hostname; } catch { continue; }
-    if (!url && !SHOP_HOSTS.test(host)) url = m.replace(/[.,;:!?)\]]+$/, '');
+    if (!url && !SHOP_HOSTS.test(host)) url = m.replace(/[.,;:!?)\]]+$/, '').replace(/#:~:text=.*$/, '');
   }
   text = text.replace(/https?:\/\/[^\s<>"«»“”]+/gi, '');
   const lines = text.split('\n');
@@ -1660,7 +1661,7 @@ async function viewCapture({ params }) {
   function takeShared(sh, fromStart = false) {
     if (!sh.text && !sh.url) { stepPaste('Rien à garder dans ce qui a été partagé.'); return; }
     sharedFromStart = fromStart;
-    if (sh.url) { keepShared(sh); stepLink(sh.url, '', sh.text, Boolean(sh.raw)); return; }
+    if (sh.url) { keepShared(sh); stepLink(sh.url, sh.title || '', sh.text, Boolean(sh.raw)); return; }
     shared = sh;
     keepShared();
     stepShared(sh);
@@ -2133,12 +2134,13 @@ async function viewCapture({ params }) {
     const who = people.find((p) => String(p.id) === params.get('said'));
     stepSaid('', who || null);
   } else if (params.has('share')) {
-    // from the iPhone Shortcut: whatever another app shared (a passage, a link, or both)
+    // from the iPhone Shortcut or Android's Share menu: whatever another app shared (a passage, a link, or both),
+    // and from Android, the page's title when a page was shared
     const raw = sharedParam();
     let saved = null;
     try { saved = sessionStorage.getItem('marginote.sharedSaved'); } catch { /* none */ }
     if (raw && raw === saved) stepStart();
-    else takeShared({ ...parseShared(raw), raw });
+    else takeShared({ ...parseShared(raw), raw, title: params.get('title') || '' });
   } else if (params.get('u') || params.get('url')) {
     stepLink(params.get('u') || params.get('url'), params.get('t') || '', params.get('q') || '');
   } else if (params.get('again') && capture.last) {
@@ -2630,6 +2632,14 @@ function bookmarklet() {
 // what the iPhone Shortcut opens, followed by what was shared
 function shareAddress() { return `${location.origin}/#/capture?share=`; }
 
+// the phone or computer this is: its way of sending from other apps is the one shown unfolded in Settings
+function deviceKind() {
+  const ua = navigator.userAgent;
+  if (/Android/i.test(ua)) return 'android';
+  if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iphone';
+  return 'computer';
+}
+
 // your name, language and password; the owner also adds and removes people
 function accountSection(me, accounts) {
   const msg = h('div', { class: 'note-line', role: 'alert' });
@@ -2735,6 +2745,9 @@ async function viewSettings() {
     try { await navigator.clipboard.writeText(text); toast('Copié'); } catch { toast('Copier n’est pas permis ici : sélectionnez le texte et copiez-le'); }
   } }, label);
   const steps = (items) => h('ol', { class: 'steps' }, items.map((i) => h('li', {}, i)));
+  // a way of sending from other apps: the one for this device is unfolded, the others folded
+  const way = (kind, title, body) => foldable(`settings:send:${kind}`, h('div', { class: 'group-row sub-head' }, h('h3', { class: 'sub-title', text: title })),
+    body, kind !== deviceKind());
   const el = h('div', {},
     h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Réglages'))),
     h('div', { class: 'pad settings-page' },
@@ -2761,24 +2774,36 @@ async function viewSettings() {
         ['Sauvegardes', `${backups.backups.count} · ${size(backups.backups.bytes)}`],
       ]),
       h('h2', { class: 'section-title', text: 'Envoyer depuis d’autres apps' }),
-      h('h3', { class: 'sub-title', text: 'Sur un ordinateur : un favori' }),
-      h('p', {}, 'Faites glisser ce bouton dans votre barre de favoris, une fois. Ensuite, sélectionnez du texte sur n’importe quelle page et cliquez sur le favori : la page s’ouvre ici, avec le passage, son lien et son titre déjà remplis.'),
-      h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Faites-le glisser dans la barre des favoris'); } }, '→ Marginote'),
-      h('h3', { class: 'sub-title', text: 'Sur l’iPhone : « Marginote » dans le menu Partager de toutes les apps' }),
-      h('p', {}, 'Un raccourci, créé une fois dans l’app Raccourcis. Ensuite, sélectionnez du texte dans n’importe quelle app (Safari, Notes, Mail, Livres, un PDF…), touchez Partager, puis Marginote : l’app s’ouvre avec le passage et vous demande d’où il vient. Un lien partagé seul (YouTube, Podcasts, un article) ouvre ici son formulaire.'),
-      steps([
-        'Dans Raccourcis, touchez + (en haut à droite). Touchez le nom en haut, « Renommer », et tapez Marginote.',
-        'Touchez ⓘ (en bas, ou dans le menu sous le nom) et activez « Dans la feuille de partage » (« Afficher dans la feuille de partage » sur les iPhone plus anciens), puis OK. Une première ligne apparaît : « Recevoir … ». Touchez le mot bleu après « Recevoir », touchez « Effacer », cochez seulement « Texte » et « URL », puis OK.',
-        'Ajoutez l’action « Texte » (champ de recherche en bas). Touchez l’intérieur de son cadre, puis « Entrée du raccourci » dans la barre au-dessus du clavier.',
-        'Ajoutez l’action qui encode le texte pour une adresse : cherchez « encod » et choisissez « Encoder l’URL » (le nom peut varier un peu). Elle prend toute seule le Texte du dessus ; laissez-la sur « Encoder ».',
-        'Ajoutez l’action « URL ». Collez l’adresse ci-dessous dans son cadre puis, juste après, sans espace, touchez le résultat de l’étape d’encodage dans la barre au-dessus du clavier.',
-        'Ajoutez l’action « Ouvrir les URL », puis OK (en haut à droite).',
-      ]),
-      h('pre', { class: 'code', text: shareAddress() }),
-      copyBtn(shareAddress(), 'Copier l’adresse'),
-      h('p', { class: 'note-line', text: 'C’est bon quand : dans Notes, vous sélectionnez une phrase, touchez Partager (derrière › dans le petit menu si besoin), faites défiler jusqu’à Marginote, et l’app s’ouvre sur « D’où vient ce passage ? » avec votre phrase. La première fois, iOS demande si le raccourci peut ouvrir l’adresse : Autoriser.' }),
-      h('p', { class: 'note-line', text: 'Il s’ouvre dans Safari : connectez-vous-y une fois (l’app de l’écran d’accueil garde sa propre connexion), avec Tailscale activé. Pour avoir Marginote en haut du menu Partager : « Modifier les actions… » tout en bas, puis ajoutez-le aux Favoris.' }),
-      h('p', { class: 'note-line', text: 'Une app sans Partager dans son menu (Kindle) : copiez le passage, puis ici, Ajouter › Coller ce que vous avez copié.' }),
+      way('computer', 'Sur un ordinateur : un favori', [
+        h('p', {}, 'Faites glisser ce bouton dans votre barre de favoris, une fois. Ensuite, sélectionnez du texte sur n’importe quelle page et cliquez sur le favori : la page s’ouvre ici, avec le passage, son lien et son titre déjà remplis.'),
+        h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Faites-le glisser dans la barre des favoris'); } }, '→ Marginote')]),
+      way('iphone', 'Sur l’iPhone : « Marginote » dans le menu Partager de toutes les apps', [
+        h('p', {}, 'Un raccourci, créé une fois dans l’app Raccourcis. Ensuite, sélectionnez du texte dans n’importe quelle app (Safari, Notes, Mail, Livres, un PDF…), touchez Partager, puis Marginote : l’app s’ouvre avec le passage et vous demande d’où il vient. Un lien partagé seul (YouTube, Podcasts, un article) ouvre ici son formulaire.'),
+        steps([
+          'Dans Raccourcis, touchez + (en haut à droite). Touchez le nom en haut, « Renommer », et tapez Marginote.',
+          'Touchez ⓘ (en bas, ou dans le menu sous le nom) et activez « Dans la feuille de partage » (« Afficher dans la feuille de partage » sur les iPhone plus anciens), puis OK. Une première ligne apparaît : « Recevoir … ». Touchez le mot bleu après « Recevoir », touchez « Effacer », cochez seulement « Texte » et « URL », puis OK.',
+          'Ajoutez l’action « Texte » (champ de recherche en bas). Touchez l’intérieur de son cadre, puis « Entrée du raccourci » dans la barre au-dessus du clavier.',
+          'Ajoutez l’action qui encode le texte pour une adresse : cherchez « encod » et choisissez « Encoder l’URL » (le nom peut varier un peu). Elle prend toute seule le Texte du dessus ; laissez-la sur « Encoder ».',
+          'Ajoutez l’action « URL ». Collez l’adresse ci-dessous dans son cadre puis, juste après, sans espace, touchez le résultat de l’étape d’encodage dans la barre au-dessus du clavier.',
+          'Ajoutez l’action « Ouvrir les URL », puis OK (en haut à droite).',
+        ]),
+        h('pre', { class: 'code', text: shareAddress() }),
+        copyBtn(shareAddress(), 'Copier l’adresse'),
+        h('p', { class: 'note-line', text: 'C’est bon quand : dans Notes, vous sélectionnez une phrase, touchez Partager (derrière › dans le petit menu si besoin), faites défiler jusqu’à Marginote, et l’app s’ouvre sur « D’où vient ce passage ? » avec votre phrase. La première fois, iOS demande si le raccourci peut ouvrir l’adresse : Autoriser.' }),
+        h('p', { class: 'note-line', text: 'Il s’ouvre dans Safari : connectez-vous-y une fois (l’app de l’écran d’accueil garde sa propre connexion), avec Tailscale activé. Pour avoir Marginote en haut du menu Partager : « Modifier les actions… » tout en bas, puis ajoutez-le aux Favoris.' }),
+        h('p', { class: 'note-line', text: 'Une app sans Partager dans son menu (Kindle) : copiez le passage, puis ici, Ajouter › Coller ce que vous avez copié.' })]),
+      way('android', 'Sur Android (Samsung et autres) : « Marginote » dans le menu Partager', [
+        h('p', {}, 'Rien à créer : une fois l’app installée depuis Chrome, Android l’ajoute au menu Partager. Ensuite, sélectionnez du texte dans n’importe quelle app (Chrome, Samsung Notes, Gmail, un PDF…), touchez Partager, puis Marginote : l’app s’ouvre avec le passage et vous demande d’où il vient. Un lien partagé seul (YouTube, un article) ouvre ici son formulaire.'),
+        steps([
+          'Activez Tailscale, puis ouvrez cette adresse dans Chrome (le navigateur de Google, pas Samsung Internet) et connectez-vous.',
+          'Dans Chrome, touchez ⋮ (en haut à droite), puis « Installer l’application ». Si vous ne voyez que « Ajouter à l’écran d’accueil », touchez-le, puis « Installer ».',
+          'Confirmez. Marginote apparaît parmi vos applications, avec sa propre icône.',
+        ]),
+        h('pre', { class: 'code', text: location.origin }),
+        copyBtn(location.origin, 'Copier l’adresse'),
+        h('p', { class: 'note-line', text: 'C’est bon quand : dans Samsung Notes, vous sélectionnez une phrase, touchez Partager, et Marginote est dans la liste (parfois sous « Plus », ou au bout d’une minute) ; le toucher ouvre l’app sur « D’où vient ce passage ? » avec votre phrase.' }),
+        h('p', { class: 'note-line', text: 'L’app installée et Chrome partagent la même connexion : connectez-vous une fois. Si l’icône sur l’écran d’accueil porte un petit logo Chrome dans un coin, Chrome a créé un simple raccourci au lieu d’installer l’app, et un raccourci n’est pas dans le menu Partager : supprimez-le, puis installez à nouveau depuis ⋮.' }),
+        h('p', { class: 'note-line', text: 'Une app qui ne partage qu’un lien vers le livre (Kindle) : copiez plutôt le passage, puis ici, Ajouter › Coller ce que vous avez copié.' })]),
       h('h2', { class: 'section-title', text: 'Application' }),
       table([
         ['Version', health.version],

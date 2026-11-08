@@ -76,10 +76,10 @@ class Library:
 
 
 class Context:
-    def __init__(self, settings: Settings, shape_changed_in: str = "", version: str = "") -> None:
+    def __init__(self, settings: Settings, shape_changed_in: str = "", folders_changed_in: str = "") -> None:
         self.settings = settings
         settings.data_dir.mkdir(parents=True, exist_ok=True)
-        gather_owner_library(settings.data_dir, version)
+        gather_owner_library(settings.data_dir, folders_changed_in)
         self.accounts = Accounts(settings.data_dir / "accounts.json")
         self.shape_changed_in = shape_changed_in
         self.reader_queue: queue.Queue = queue.Queue()   # (library, photo id) of inbox photos waiting to be read

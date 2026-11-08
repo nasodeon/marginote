@@ -12,10 +12,11 @@ import time
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 import pytesseract
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -25,9 +26,11 @@ from .accounts import LANGUAGES, OWNER, check_password, public
 from .config import Settings, load_settings
 from .context import Context
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 # the release that gave the database its current shape: names the copy made before upgrading to it
 SHAPE_CHANGED_IN = "0.6.0"
+# the release that gave every library, the owner's too, its own folder: names the copy made before the move
+FOLDERS_CHANGED_IN = "0.7.1"
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("marginote")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -98,7 +101,7 @@ class AccountPatch(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     logging.basicConfig(level=logging.INFO)    # before the libraries open: what they do appears in the log
-    ctx = Context(settings, SHAPE_CHANGED_IN, VERSION)
+    ctx = Context(settings, SHAPE_CHANGED_IN, FOLDERS_CHANGED_IN)
     ctx.libraries()     # every library is opened, and brought up to date, now rather than at first use
 
     @asynccontextmanager
@@ -274,4 +277,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.set_cookie(LANG_COOKIE, lang, max_age=365 * 24 * 3600, samesite="lax", secure=settings.cookie_secure)
         return response
 
+    @app.get("/share", include_in_schema=False)
+    def shared_from_android(title: str = "", text: str = "", url: str = ""):
+        """Android's Share menu, once the app is installed from Chrome (share_target in the manifest). It hands
+        the capture screen what was shared, in the part of the address after # that never reaches the server
+        again: the same way in as the iPhone Shortcut. Nothing is kept or logged here."""
+        return RedirectResponse(share_redirect(title, text, url), status_code=303)
+
     return app
+
+
+def share_redirect(title: str, text: str, url: str) -> str:
+    """Where a share from Android goes. Most Android apps put a link inside the text, not in url; the capture
+    screen finds it there, as it does for the iPhone. The title (a page's, when a page is shared) is used only
+    with a link."""
+    text, url = text.strip(), url.strip()
+    raw = "\n".join(part for part in (text, url if url and url not in text else "") if part)
+    if not raw:
+        return "/#/capture"
+    target = "/#/capture?share=" + quote(raw, safe="")
+    if title.strip() and title.strip() not in text:
+        target += "&title=" + quote(title.strip(), safe="")
+    return target
