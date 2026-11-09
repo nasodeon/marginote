@@ -65,6 +65,32 @@ def read_photo(ctx: Context, data: bytes) -> tuple[bytes, int, int, list, str | 
     return result
 
 
+def queue_photo(ctx: Context, lib: Library, conn: sqlite3.Connection, data: bytes, source_id: int | None) -> str:
+    """Keep a photo in the inbox, to be read in the background. The same photo twice is kept once."""
+    sha = hashlib.sha256(data).hexdigest()
+    existing = conn.execute("SELECT id FROM photos WHERE sha256 = ?", (sha,)).fetchone()
+    if existing:
+        conn.execute("UPDATE photos SET queued = 1, source_id = COALESCE(?, source_id) WHERE id = ?",
+                     (source_id, existing["id"]))
+        conn.commit()
+        return existing["id"]
+    try:
+        ocr.open_image(data)   # reads only the header: refuse what is not an image now
+    except BAD_IMAGE:
+        raise HTTPException(415, "This file is not an image the app can read") from None
+    photo_id = uuid.uuid4().hex
+    rel = Path(INBOX) / f"{photo_id}.upload"
+    (lib.files.photos / rel).write_bytes(data)
+    conn.execute(
+        "INSERT INTO photos (id, path, width, height, sha256, words, created_at, source_id, queued, status) "
+        "VALUES (?, ?, 0, 0, ?, NULL, ?, ?, 1, 'reading')",
+        (photo_id, rel.as_posix(), sha, db.now(), source_id),
+    )
+    conn.commit()
+    ctx.reader_queue.put(("photo", lib, photo_id))
+    return photo_id
+
+
 def start_reader(ctx: Context) -> None:
     """Photos sent to the inbox, and PDFs, are read here, in the background, so the phone can send several and
     close. One at a time, whoever sent it; each is written back to its own library."""
@@ -174,30 +200,13 @@ def router(ctx: Context) -> APIRouter:
             raise HTTPException(413, "Photo larger than 30 MB")
         if source_id is not None:
             load_source(conn, source_id)
+        if later:
+            return photo_dict(load_photo(conn, queue_photo(ctx, lib, conn, data, source_id)), conn)
         sha = hashlib.sha256(data).hexdigest()
         existing = conn.execute("SELECT * FROM photos WHERE sha256 = ?", (sha,)).fetchone()
         if existing:
-            if later:
-                conn.execute("UPDATE photos SET queued = 1, source_id = COALESCE(?, source_id) WHERE id = ?",
-                             (source_id, existing["id"]))
-                conn.commit()
             return photo_dict(load_photo(conn, existing["id"]), conn)
         photo_id = uuid.uuid4().hex
-        if later:
-            try:
-                ocr.open_image(data)   # reads only the header: refuse what is not an image now
-            except BAD_IMAGE:
-                raise HTTPException(415, "This file is not an image the app can read")
-            rel = Path(INBOX) / f"{photo_id}.upload"
-            (lib.files.photos / rel).write_bytes(data)
-            conn.execute(
-                "INSERT INTO photos (id, path, width, height, sha256, words, created_at, source_id, queued, status) "
-                "VALUES (?, ?, 0, 0, ?, NULL, ?, ?, 1, 'reading')",
-                (photo_id, rel.as_posix(), sha, db.now(), source_id),
-            )
-            conn.commit()
-            ctx.reader_queue.put(("photo", lib, photo_id))
-            return photo_dict(load_photo(conn, photo_id), conn)
         try:
             stored, width, height, words, page = read_photo(ctx, data)
         except BAD_IMAGE:

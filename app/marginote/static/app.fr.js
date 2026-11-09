@@ -2991,6 +2991,82 @@ function bookmarklet() {
 // what the iPhone Shortcut opens, followed by what was shared
 function shareAddress() { return `${location.origin}/#/capture?share=`; }
 
+// ----- sending keys: a computer or a phone adds to this library without logging in -----
+
+async function windowsInstaller(key) {
+  const template = await (await fetch('/static/marginote-windows.ps1', { cache: 'no-store' })).text();
+  const script = template.replace("'__SERVER__'", `'${location.origin}'`).replace("'__KEY__'", `'${key}'`).replace(/\r?\n/g, '\r\n');
+  // with its byte-order mark, so that Windows PowerShell reads its accents right
+  const url = URL.createObjectURL(new Blob(['\ufeff' + script], { type: 'application/octet-stream' }));
+  const a = h('a', { href: url, download: 'marginote-windows.ps1' });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function keysSection(keys, copyBtn, steps) {
+  const list = h('div', { class: 'key-list' });
+  const shown = h('div', { class: 'key-made' });
+  const name = h('input', { class: 'input', id: 'k-name', maxlength: 60, placeholder: 'PC du bureau, iPhone…', autocomplete: 'off' });
+  const drawList = () => put(list, keys.length ? keys.map((k) => h('div', { class: 'key-row' },
+    h('div', { class: 'main' }, h('b', { text: k.name }),
+      h('span', { class: 'muted', text: joinDots([`créée le ${fullDate(k.created_at)}`, k.last_used ? `dernier envoi : ${dateTime(k.last_used)}` : 'jamais utilisée']).join('') })),
+    h('button', { class: 'btn small danger', type: 'button', onclick: async () => {
+      const ok = await confirmDialog({ title: `Supprimer la clé « ${k.name} » ?`, text: 'Cet appareil ne pourra plus rien envoyer à votre bibliothèque.',
+        choices: [{ label: 'Supprimer la clé', value: true, danger: true }] });
+      if (!ok) return;
+      try { await api(`/api/keys/${k.id}`, { method: 'DELETE' }); keys = keys.filter((x) => x.id !== k.id); drawList(); toast('Clé supprimée'); } catch (err) { toast(err.message); }
+    } }, 'Supprimer…'))) : h('p', { class: 'note-line', text: 'Aucune clé pour l’instant.' }));
+  const make = async (ev) => {
+    ev.preventDefault();
+    if (!name.value.trim()) { name.focus(); return; }
+    try {
+      const made = await api('/api/keys', { method: 'POST', body: { name: name.value.trim() } });
+      keys = [...keys, made];
+      name.value = '';
+      drawList();
+      const endpoint = `${location.origin}/api/send/passage`;
+      const bearer = `Bearer ${made.key}`;
+      const command = 'powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\\Downloads\\marginote-windows.ps1"';
+      put(shown,
+        h('p', {}, h('b', { text: `La clé de « ${made.name} »` }), ', affichée cette fois seulement :'),
+        h('pre', { class: 'code', text: made.key }),
+        copyBtn(made.key, 'Copier la clé'),
+        h('h3', { class: 'sub-title', text: 'Sous Windows : Ctrl+Alt+M' }),
+        steps([
+          h('span', {}, 'Cliquez sur ', h('button', { class: 'btn small', type: 'button', onclick: () => windowsInstaller(made.key).catch((err) => toast(err.message)) },
+            icon('download'), 'Télécharger l’installateur Windows'), ' : le fichier marginote-windows.ps1 arrive dans Téléchargements.'),
+          'Ouvrez PowerShell : clic droit sur le bouton Démarrer (ou Windows+X), puis « Terminal » (« Windows PowerShell » sous Windows 10).',
+          h('span', {}, 'Collez cette ligne, puis appuyez sur Entrée :', h('pre', { class: 'code', text: command }), copyBtn(command, 'Copier la ligne')),
+        ]),
+        h('p', { class: 'note-line', text: 'C’est bon quand : PowerShell écrit « C’est prêt. » Ensuite, dans un PDF, sélectionnez une phrase, copiez-la (Ctrl+C) et appuyez sur Ctrl+Alt+M : une notification dit où elle est gardée. Ctrl+Alt+N demande d’abord un commentaire. Un PDF ou une image : clic droit › Envoyer vers › Marginote (d’abord « Afficher d’autres options » sous Windows 11).' }),
+        h('p', { class: 'note-line', text: 'L’installateur s’efface une fois terminé : il contenait la clé. Si PowerShell ne trouve pas le fichier, tapez powershell -ExecutionPolicy Bypass -File suivi d’une espace, faites glisser le fichier depuis Téléchargements dans la fenêtre, puis Entrée.' }),
+        h('h3', { class: 'sub-title', text: 'Sur l’iPhone : envoyer sans ouvrir l’app' }),
+        steps([
+          'Dans Raccourcis, touchez +. Touchez le nom en haut, « Renommer », et tapez Marginote · envoyer.',
+          'Touchez ⓘ et activez « Dans la feuille de partage », puis OK. Touchez le mot bleu après « Recevoir », touchez « Effacer », cochez seulement « Texte », puis OK.',
+          h('span', {}, 'Ajoutez l’action « Obtenir le contenu de l’URL ». Touchez son « URL » bleu et collez :', h('pre', { class: 'code', text: endpoint }), copyBtn(endpoint, 'Copier l’adresse')),
+          h('span', {}, 'Touchez › sur cette action. Méthode : POST. En-têtes : « Ajouter un nouvel en-tête », clé Authorization, texte :', h('pre', { class: 'code', text: bearer }), copyBtn(bearer, 'Copier ce texte')),
+          'Corps de la requête : JSON. « Ajouter un nouveau champ » › Texte : clé text, valeur : touchez « Entrée du raccourci » au-dessus du clavier. Un autre champ › Texte : clé origin, valeur iphone.',
+          'Ajoutez l’action « Obtenir la valeur du dictionnaire » : « Valeur » pour la clé say, dans « Contenu de l’URL ».',
+          'Ajoutez l’action « Afficher la notification » et mettez-y « Valeur du dictionnaire ». OK.',
+        ]),
+        h('p', { class: 'note-line', text: 'C’est bon quand : dans Fichiers ou Livres, vous sélectionnez une phrase d’un PDF, touchez Partager › Marginote · envoyer, et une notification dit « Gardé · … » (ou « À trier · … »). La première fois, iOS demande si le raccourci peut se connecter à votre serveur : Autoriser.' }));
+      shown.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    } catch (err) { toast(err.message); }
+  };
+  drawList();
+  return h('div', { class: 'keys-block' },
+    h('h3', { class: 'sub-title', text: 'Clés d’envoi' }),
+    h('p', {}, 'Une clé d’envoi permet à un ordinateur ou à un téléphone d’ajouter des passages, des PDF et des photos à votre bibliothèque sans s’y connecter : Ctrl+Alt+M sous Windows, ou un raccourci sur l’iPhone qui n’ouvre pas l’app. Elle sert seulement à ajouter, jamais à lire votre bibliothèque. Une clé par appareil ; supprimez-la, et cet appareil ne peut plus rien envoyer.'),
+    list,
+    h('form', { class: 'two key-form', onsubmit: make },
+      h('label', { class: 'field grow', for: 'k-name' }, h('span', { text: 'pour quel appareil ?' }), name),
+      h('button', { class: 'btn small', type: 'submit' }, 'Créer une clé')),
+    shown);
+}
+
 // the phone or computer this is: its way of sending from other apps is the one shown unfolded in Settings
 function deviceKind() {
   const ua = navigator.userAgent;
@@ -3092,7 +3168,7 @@ function accountSection(me, accounts) {
 }
 
 async function viewSettings() {
-  const [health, backups, me] = await Promise.all([api('/api/health'), api('/api/backup/status'), api('/api/me')]);
+  const [health, backups, me, keys] = await Promise.all([api('/api/health'), api('/api/backup/status'), api('/api/me'), api('/api/keys')]);
   const accounts = me.owner ? await api('/api/accounts') : [];
   const folder = 'data/users/' + me.id;   // where this library is, on the NAS
   nav.label('Réglages');
@@ -3136,6 +3212,7 @@ async function viewSettings() {
         ['Sauvegardes', `${backups.backups.count} · ${size(backups.backups.bytes)}`],
       ]),
       h('h2', { class: 'section-title', text: 'Envoyer depuis d’autres apps' }),
+      keysSection(keys, copyBtn, steps),
       way('computer', 'Sur un ordinateur : un favori', [
         h('p', {}, 'Faites glisser ce bouton dans votre barre de favoris, une fois. Ensuite, sélectionnez du texte sur n’importe quelle page et cliquez sur le favori : la page s’ouvre ici, avec le passage, son lien et son titre déjà remplis.'),
         h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Faites-le glisser dans la barre des favoris'); } }, '→ Marginote')]),

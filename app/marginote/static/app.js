@@ -2987,6 +2987,82 @@ function bookmarklet() {
 // what the iPhone Shortcut opens, followed by what was shared
 function shareAddress() { return `${location.origin}/#/capture?share=`; }
 
+// ----- sending keys: a computer or a phone adds to this library without logging in -----
+
+async function windowsInstaller(key) {
+  const template = await (await fetch('/static/marginote-windows.ps1', { cache: 'no-store' })).text();
+  const script = template.replace("'__SERVER__'", `'${location.origin}'`).replace("'__KEY__'", `'${key}'`).replace(/\r?\n/g, '\r\n');
+  // with its byte-order mark, so that Windows PowerShell reads its accents right
+  const url = URL.createObjectURL(new Blob(['\ufeff' + script], { type: 'application/octet-stream' }));
+  const a = h('a', { href: url, download: 'marginote-windows.ps1' });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function keysSection(keys, copyBtn, steps) {
+  const list = h('div', { class: 'key-list' });
+  const shown = h('div', { class: 'key-made' });
+  const name = h('input', { class: 'input', id: 'k-name', maxlength: 60, placeholder: 'PC du bureau, iPhone…', autocomplete: 'off' });
+  const drawList = () => put(list, keys.length ? keys.map((k) => h('div', { class: 'key-row' },
+    h('div', { class: 'main' }, h('b', { text: k.name }),
+      h('span', { class: 'muted', text: joinDots([`made ${fullDate(k.created_at)}`, k.last_used ? `last used ${dateTime(k.last_used)}` : 'never used']).join('') })),
+    h('button', { class: 'btn small danger', type: 'button', onclick: async () => {
+      const ok = await confirmDialog({ title: `Delete the key “${k.name}”?`, text: 'That device can no longer send to your library.',
+        choices: [{ label: 'Delete the key', value: true, danger: true }] });
+      if (!ok) return;
+      try { await api(`/api/keys/${k.id}`, { method: 'DELETE' }); keys = keys.filter((x) => x.id !== k.id); drawList(); toast('Key deleted'); } catch (err) { toast(err.message); }
+    } }, 'Delete…'))) : h('p', { class: 'note-line', text: 'No key yet.' }));
+  const make = async (ev) => {
+    ev.preventDefault();
+    if (!name.value.trim()) { name.focus(); return; }
+    try {
+      const made = await api('/api/keys', { method: 'POST', body: { name: name.value.trim() } });
+      keys = [...keys, made];
+      name.value = '';
+      drawList();
+      const endpoint = `${location.origin}/api/send/passage`;
+      const bearer = `Bearer ${made.key}`;
+      const command = 'powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\\Downloads\\marginote-windows.ps1"';
+      put(shown,
+        h('p', {}, h('b', { text: `The key for “${made.name}”` }), ', shown only now:'),
+        h('pre', { class: 'code', text: made.key }),
+        copyBtn(made.key, 'Copy the key'),
+        h('h3', { class: 'sub-title', text: 'On Windows: Ctrl+Alt+M' }),
+        steps([
+          h('span', {}, 'Click ', h('button', { class: 'btn small', type: 'button', onclick: () => windowsInstaller(made.key).catch((err) => toast(err.message)) },
+            icon('download'), 'Download the Windows installer'), ': marginote-windows.ps1 lands in Téléchargements.'),
+          'Open PowerShell: right-click the Start button (or Windows+X), then « Terminal » (« Windows PowerShell » on Windows 10).',
+          h('span', {}, 'Paste this line, then press Entrée:', h('pre', { class: 'code', text: command }), copyBtn(command, 'Copy the line')),
+        ]),
+        h('p', { class: 'note-line', text: 'Done when: PowerShell writes « C’est prêt. » Then, in a PDF, select a sentence, copy it (Ctrl+C) and press Ctrl+Alt+M: a notification says where it was kept. Ctrl+Alt+N asks for a comment first. A PDF or an image: right-click › Envoyer vers › Marginote (« Afficher d’autres options » first on Windows 11).' }),
+        h('p', { class: 'note-line', text: 'The installer deletes itself once done: it held the key. If PowerShell says the file is not found, type powershell -ExecutionPolicy Bypass -File and a space, drag the file from Téléchargements into the window, then Entrée.' }),
+        h('h3', { class: 'sub-title', text: 'On the iPhone: send without opening the app' }),
+        steps([
+          'In Raccourcis, tap +. Tap the name at the top, « Renommer », and type Marginote · envoyer.',
+          'Tap ⓘ and turn on « Dans la feuille de partage », then OK. Tap the blue word after « Recevoir », tap « Effacer », tick only « Texte », then OK.',
+          h('span', {}, 'Add the action « Obtenir le contenu de l’URL ». Touch its blue « URL » and paste:', h('pre', { class: 'code', text: endpoint }), copyBtn(endpoint, 'Copy the address')),
+          h('span', {}, 'Tap › on that action. Méthode: POST. En-têtes: « Ajouter un nouvel en-tête », key Authorization, text:', h('pre', { class: 'code', text: bearer }), copyBtn(bearer, 'Copy this text')),
+          'Corps de la requête: JSON. « Ajouter un nouveau champ » › Texte: key text, value: tap « Entrée du raccourci » above the keyboard. Another field › Texte: key origin, value iphone.',
+          'Add the action « Obtenir la valeur du dictionnaire »: « Valeur » for the key say, in « Contenu de l’URL ».',
+          'Add the action « Afficher la notification » and put « Valeur du dictionnaire » in it. OK.',
+        ]),
+        h('p', { class: 'note-line', text: 'Done when: in Fichiers or Livres, you select a sentence of a PDF, tap Partager › Marginote · envoyer, and a notification says « Gardé · … » (or « À trier · … »). The first time, iOS asks whether the shortcut may connect to your server: Autoriser.' }));
+      shown.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    } catch (err) { toast(err.message); }
+  };
+  drawList();
+  return h('div', { class: 'keys-block' },
+    h('h3', { class: 'sub-title', text: 'Sending keys' }),
+    h('p', {}, 'A sending key lets a computer or a phone add passages, PDFs and photos to your library without logging in: Ctrl+Alt+M on Windows, or a shortcut on the iPhone that does not open the app. It can only add, never read your library. One key per device; delete it, and that device can no longer send.'),
+    list,
+    h('form', { class: 'two key-form', onsubmit: make },
+      h('label', { class: 'field grow', for: 'k-name' }, h('span', { text: 'for which device?' }), name),
+      h('button', { class: 'btn small', type: 'submit' }, 'Make a key')),
+    shown);
+}
+
 // the phone or computer this is: its way of sending from other apps is the one shown unfolded in Settings
 function deviceKind() {
   const ua = navigator.userAgent;
@@ -3088,7 +3164,7 @@ function accountSection(me, accounts) {
 }
 
 async function viewSettings() {
-  const [health, backups, me] = await Promise.all([api('/api/health'), api('/api/backup/status'), api('/api/me')]);
+  const [health, backups, me, keys] = await Promise.all([api('/api/health'), api('/api/backup/status'), api('/api/me'), api('/api/keys')]);
   const accounts = me.owner ? await api('/api/accounts') : [];
   const folder = 'data/users/' + me.id;   // where this library is, on the NAS
   nav.label('Settings');
@@ -3132,6 +3208,7 @@ async function viewSettings() {
         ['Backups', `${backups.backups.count} · ${size(backups.backups.bytes)}`],
       ]),
       h('h2', { class: 'section-title', text: 'Sending from other apps' }),
+      keysSection(keys, copyBtn, steps),
       way('computer', 'On a computer: a bookmark', [
         h('p', {}, 'Drag this button to your bookmarks bar, once. Then select text on any page and click the bookmark: the page opens here, with the passage, its link and its title filled in.'),
         h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Drag it to the bookmarks bar'); } }, '→ Marginote')]),

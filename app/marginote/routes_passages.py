@@ -63,14 +63,46 @@ def waiting_dict(row: sqlite3.Row) -> dict:
             "guess": json.loads(row["guess"]) if row["guess"] else None}
 
 
+def place(conn: sqlite3.Connection, text: str) -> tuple[matching.Match | None, list[matching.Match], bool]:
+    reading = documents.reading(conn)
+    best, others = matching.find(conn, text, reading)
+    return best, others, matching.is_sure(best, others, reading)
+
+
+def wait(conn: sqlite3.Connection, body: PassageIn, reason: str, source_id: int | None = None,
+         guess: dict | None = None) -> dict:
+    wid = conn.execute(
+        "INSERT INTO waiting (text, note, url, title, origin, source_id, guess, reason, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (body.text.strip() or None, (body.note or "").strip() or None, body.url, body.title, body.origin, source_id,
+         json.dumps(guess, ensure_ascii=False) if guess else None, reason, db.now())).lastrowid
+    conn.commit()
+    return {"waiting": waiting_dict(conn.execute("SELECT * FROM waiting WHERE id = ?", (wid,)).fetchone())}
+
+
+def receive(conn: sqlite3.Connection, body: PassageIn) -> dict:
+    """Keep a passage where it is found, sure; else let it wait with what was guessed."""
+    if not body.text.strip() and not body.url:
+        raise HTTPException(422, "Send a passage, a link, or both")
+    if not body.text.strip():
+        return wait(conn, body, "source")
+    best, others, sure = place(conn, body.text)
+    if best and sure:
+        guess = match_dict(conn, best)
+        if guess["source_id"] is None:              # its PDF has not been given its source yet
+            return wait(conn, body, "source", guess=guess)
+        entry_id = add_entry(conn, guess["source_id"], best.text, best.page, body.note, best.photo_id,
+                             guess["word_start"], guess["word_end"])
+        documents.set_reading(conn, best.document_id)
+        conn.commit()
+        return {"kept": entry_dict(conn, entry_id), "where": guess}
+    guess = match_dict(conn, best) if best else None
+    return wait(conn, body, "place" if best else "source", source_id=guess["source_id"] if guess else None, guess=guess)
+
+
 def router(ctx: Context) -> APIRouter:
     api = APIRouter(dependencies=ctx.auth, tags=["passages"])
     get_db = ctx.get_db
-
-    def place(conn: sqlite3.Connection, text: str) -> tuple[matching.Match | None, list[matching.Match], bool]:
-        reading = documents.reading(conn)
-        best, others = matching.find(conn, text, reading)
-        return best, others, matching.is_sure(best, others, reading)
 
     @api.post("/api/passages/find")
     def find_passage(body: FindIn, conn: sqlite3.Connection = Depends(get_db)):
@@ -80,36 +112,11 @@ def router(ctx: Context) -> APIRouter:
         return {"match": match_dict(conn, best) if best else None, "sure": sure,
                 "others": [match_dict(conn, m) for m in others[:4]]}
 
-    def wait(conn: sqlite3.Connection, body: PassageIn, reason: str, source_id: int | None = None,
-             guess: dict | None = None) -> dict:
-        wid = conn.execute(
-            "INSERT INTO waiting (text, note, url, title, origin, source_id, guess, reason, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (body.text.strip() or None, (body.note or "").strip() or None, body.url, body.title, body.origin, source_id,
-             json.dumps(guess, ensure_ascii=False) if guess else None, reason, db.now())).lastrowid
-        conn.commit()
-        return {"waiting": waiting_dict(conn.execute("SELECT * FROM waiting WHERE id = ?", (wid,)).fetchone())}
-
     @api.post("/api/passages", status_code=201)
     def send_passage(body: PassageIn, conn: sqlite3.Connection = Depends(get_db)):
         """A passage copied while reading. Found in one of your PDFs, in one place: kept at once as a quote
         (answer: kept, and where). Otherwise it waits in À trier (answer: waiting), with where it may be."""
-        if not body.text.strip() and not body.url:
-            raise HTTPException(422, "Send a passage, a link, or both")
-        if not body.text.strip():
-            return wait(conn, body, "source")
-        best, others, sure = place(conn, body.text)
-        if best and sure:
-            guess = match_dict(conn, best)
-            if guess["source_id"] is None:              # its PDF has not been given its source yet
-                return wait(conn, body, "source", guess=guess)
-            entry_id = add_entry(conn, guess["source_id"], best.text, best.page, body.note, best.photo_id,
-                                 guess["word_start"], guess["word_end"])
-            documents.set_reading(conn, best.document_id)
-            conn.commit()
-            return {"kept": entry_dict(conn, entry_id), "where": guess}
-        guess = match_dict(conn, best) if best else None
-        return wait(conn, body, "place" if best else "source", source_id=guess["source_id"] if guess else None, guess=guess)
+        return receive(conn, body)
 
     @api.get("/api/waiting")
     def list_waiting(conn: sqlite3.Connection = Depends(get_db)):

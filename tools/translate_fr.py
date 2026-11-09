@@ -196,6 +196,7 @@ const KINDS = {
     a = s.index("      h('h2', { class: 'section-title', text: 'Sending from other apps' }),")
     b = s.index("      h('h2', { class: 'section-title', text: 'App' }),")
     s = s[:a] + fr("""      h('h2', { class: 'section-title', text: 'Envoyer depuis d’autres apps' }),
+      keysSection(keys, copyBtn, steps),
       way('computer', 'Sur un ordinateur : un favori', [
         h('p', {}, 'Faites glisser ce bouton dans votre barre de favoris, une fois. Ensuite, sélectionnez du texte sur n’importe quelle page et cliquez sur le favori : la page s’ouvre ici, avec le passage, son lien et son titre déjà remplis.'),
         h('a', { class: 'btn small bookmarklet', href: bookmarklet(), onclick: (ev) => { ev.preventDefault(); toast('Faites-le glisser dans la barre des favoris'); } }, '→ Marginote')]),
@@ -611,6 +612,54 @@ const KINDS = {
         "Authors": "Auteurs",
         "with your comments": "avec vos commentaires",
         "Bibliography at the end": "Bibliographie à la fin",
+        # sending keys
+        "Sending keys": "Clés d’envoi",
+        "A sending key lets a computer or a phone add passages, PDFs and photos to your library without logging in: Ctrl+Alt+M on Windows, or a shortcut on the iPhone that does not open the app. It can only add, never read your library. One key per device; delete it, and that device can no longer send.":
+            "Une clé d’envoi permet à un ordinateur ou à un téléphone d’ajouter des passages, des PDF et des photos à votre bibliothèque sans s’y connecter : Ctrl+Alt+M sous Windows, ou un raccourci sur l’iPhone qui n’ouvre pas l’app. Elle sert seulement à ajouter, jamais à lire votre bibliothèque. Une clé par appareil ; supprimez-la, et cet appareil ne peut plus rien envoyer.",
+        "No key yet.": "Aucune clé pour l’instant.",
+        "made ${fullDate(k.created_at)}": "créée le ${fullDate(k.created_at)}",
+        "last used ${dateTime(k.last_used)}": "dernier envoi : ${dateTime(k.last_used)}",
+        "never used": "jamais utilisée",
+        "Delete the key “${k.name}”?": "Supprimer la clé « ${k.name} » ?",
+        "That device can no longer send to your library.": "Cet appareil ne pourra plus rien envoyer à votre bibliothèque.",
+        "Delete the key": "Supprimer la clé",
+        "Key deleted": "Clé supprimée",
+        "for which device?": "pour quel appareil ?",
+        "Make a key": "Créer une clé",
+        "The key for “${made.name}”": "La clé de « ${made.name} »",
+        ", shown only now:": ", affichée cette fois seulement :",
+        "Copy the key": "Copier la clé",
+        "On Windows: Ctrl+Alt+M": "Sous Windows : Ctrl+Alt+M",
+        "Click ": "Cliquez sur ",
+        "Download the Windows installer": "Télécharger l’installateur Windows",
+        ": marginote-windows.ps1 lands in Téléchargements.": " : le fichier marginote-windows.ps1 arrive dans Téléchargements.",
+        "Open PowerShell: right-click the Start button (or Windows+X), then « Terminal » (« Windows PowerShell » on Windows 10).":
+            "Ouvrez PowerShell : clic droit sur le bouton Démarrer (ou Windows+X), puis « Terminal » (« Windows PowerShell » sous Windows 10).",
+        "Paste this line, then press Entrée:": "Collez cette ligne, puis appuyez sur Entrée :",
+        "Copy the line": "Copier la ligne",
+        "Done when: PowerShell writes « C’est prêt. » Then, in a PDF, select a sentence, copy it (Ctrl+C) and press Ctrl+Alt+M: a notification says where it was kept. Ctrl+Alt+N asks for a comment first. A PDF or an image: right-click › Envoyer vers › Marginote (« Afficher d’autres options » first on Windows 11).":
+            "C’est bon quand : PowerShell écrit « C’est prêt. » Ensuite, dans un PDF, sélectionnez une phrase, copiez-la (Ctrl+C) et appuyez sur Ctrl+Alt+M : une notification dit où elle est gardée. Ctrl+Alt+N demande d’abord un commentaire. Un PDF ou une image : clic droit › Envoyer vers › Marginote (d’abord « Afficher d’autres options » sous Windows 11).",
+        "The installer deletes itself once done: it held the key. If PowerShell says the file is not found, type powershell -ExecutionPolicy Bypass -File and a space, drag the file from Téléchargements into the window, then Entrée.":
+            "L’installateur s’efface une fois terminé : il contenait la clé. Si PowerShell ne trouve pas le fichier, tapez powershell -ExecutionPolicy Bypass -File suivi d’une espace, faites glisser le fichier depuis Téléchargements dans la fenêtre, puis Entrée.",
+        "On the iPhone: send without opening the app": "Sur l’iPhone : envoyer sans ouvrir l’app",
+        "In Raccourcis, tap +. Tap the name at the top, « Renommer », and type Marginote · envoyer.":
+            "Dans Raccourcis, touchez +. Touchez le nom en haut, « Renommer », et tapez Marginote · envoyer.",
+        "Tap ⓘ and turn on « Dans la feuille de partage », then OK. Tap the blue word after « Recevoir », tap « Effacer », tick only « Texte », then OK.":
+            "Touchez ⓘ et activez « Dans la feuille de partage », puis OK. Touchez le mot bleu après « Recevoir », touchez « Effacer », cochez seulement « Texte », puis OK.",
+        "Add the action « Obtenir le contenu de l’URL ». Touch its blue « URL » and paste:":
+            "Ajoutez l’action « Obtenir le contenu de l’URL ». Touchez son « URL » bleu et collez :",
+        "Tap › on that action. Méthode: POST. En-têtes: « Ajouter un nouvel en-tête », key Authorization, text:":
+            "Touchez › sur cette action. Méthode : POST. En-têtes : « Ajouter un nouvel en-tête », clé Authorization, texte :",
+        "Copy this text": "Copier ce texte",
+        "Copy the address": "Copier l’adresse",
+        "Corps de la requête: JSON. « Ajouter un nouveau champ » › Texte: key text, value: tap « Entrée du raccourci » above the keyboard. Another field › Texte: key origin, value iphone.":
+            "Corps de la requête : JSON. « Ajouter un nouveau champ » › Texte : clé text, valeur : touchez « Entrée du raccourci » au-dessus du clavier. Un autre champ › Texte : clé origin, valeur iphone.",
+        "Add the action « Obtenir la valeur du dictionnaire »: « Valeur » for the key say, in « Contenu de l’URL ».":
+            "Ajoutez l’action « Obtenir la valeur du dictionnaire » : « Valeur » pour la clé say, dans « Contenu de l’URL ».",
+        "Add the action « Afficher la notification » and put « Valeur du dictionnaire » in it. OK.":
+            "Ajoutez l’action « Afficher la notification » et mettez-y « Valeur du dictionnaire ». OK.",
+        "Done when: in Fichiers or Livres, you select a sentence of a PDF, tap Partager › Marginote · envoyer, and a notification says « Gardé · … » (or « À trier · … »). The first time, iOS asks whether the shortcut may connect to your server: Autoriser.":
+            "C’est bon quand : dans Fichiers ou Livres, vous sélectionnez une phrase d’un PDF, touchez Partager › Marginote · envoyer, et une notification dit « Gardé · … » (ou « À trier · … »). La première fois, iOS demande si le raccourci peut se connecter à votre serveur : Autoriser.",
         # PDFs
         "Choose a PDF file": "Choisissez un fichier PDF",
         "Sending ${file.name}…": "Envoi de ${file.name}…",

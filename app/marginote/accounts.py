@@ -4,6 +4,10 @@ app reads one library from another.
 The owner is the first account: its password is MARGINOTE_PASSWORD from the compose file. The others are
 kept in data/accounts.json, their passwords scrambled with scrypt (never stored as typed). Every library,
 the owner's too, is a folder of its own: data/users/<id>/ (data/users/owner/ for the owner).
+
+A sending key lets a computer or a phone add to one library (a passage, a PDF, a photo) without logging in,
+and do nothing else: it cannot read the library. It is shown once when made; only its SHA-256 is kept, with
+the account it belongs to. Deleted, it stops working at once.
 """
 
 import hashlib
@@ -19,6 +23,8 @@ from pathlib import Path
 OWNER = "owner"
 LANGUAGES = ("fr", "en")
 MIN_PASSWORD = 8
+KEY_PREFIX = "mgk"
+MAX_KEYS = 20
 _SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1}
 
 
@@ -151,6 +157,61 @@ class Accounts:
             self._save()
             return dict(account)
 
+    # ----- sending keys -----
+
+    def keys(self, account_id: str) -> list[dict]:
+        account = self.get(account_id)
+        return [key_public(k) for k in (account or {}).get("keys", [])]
+
+    def add_key(self, account_id: str, name: str) -> tuple[dict, str]:
+        """A new sending key: (what is kept of it, the key itself, shown once)."""
+        name = " ".join(name.split())[:60] or "key"
+        key_id = secrets.token_hex(4)
+        secret = secrets.token_urlsafe(24)
+        full = f"{KEY_PREFIX}_{key_id}_{secret}"
+        entry = {"id": key_id, "name": name, "hash": hashlib.sha256(full.encode()).hexdigest(), "created_at": _now(),
+                 "last_used": None}
+        with self._lock:
+            self._fresh()
+            account = next((a for a in self._list if a["id"] == account_id), None)
+            if account is None:
+                raise KeyError(account_id)
+            if len(account.get("keys", [])) >= MAX_KEYS:
+                raise ValueError(f"At most {MAX_KEYS} sending keys: delete one first")
+            account.setdefault("keys", []).append(entry)
+            self._save()
+        return key_public(entry), full
+
+    def remove_key(self, account_id: str, key_id: str) -> None:
+        with self._lock:
+            self._fresh()
+            account = next((a for a in self._list if a["id"] == account_id), None)
+            keys = (account or {}).get("keys", [])
+            kept = [k for k in keys if k["id"] != key_id]
+            if account is None or len(kept) == len(keys):
+                raise KeyError(key_id)
+            account["keys"] = kept
+            self._save()
+
+    def by_key(self, full: str) -> tuple[dict, dict] | None:
+        """The account and key a sending key belongs to, or None. Its last use is noted (every ten minutes at
+        most, so sending does not rewrite the file each time)."""
+        parts = (full or "").split("_", 2)
+        if len(parts) != 3 or parts[0] != KEY_PREFIX:
+            return None
+        digest = hashlib.sha256(full.encode()).hexdigest()
+        with self._lock:
+            self._fresh()
+            for account in self._list:
+                for key in account.get("keys", []):
+                    if key["id"] == parts[1] and hmac.compare_digest(key["hash"], digest):
+                        now = _now()
+                        if (key.get("last_used") or "") < _ten_minutes_ago():
+                            key["last_used"] = now
+                            self._save()
+                        return dict(account), key_public(key)
+        return None
+
     def remove(self, account_id: str) -> dict:
         if account_id == OWNER:
             raise ValueError("The owner cannot be removed")
@@ -162,6 +223,15 @@ class Accounts:
             self._list.remove(account)
             self._save()
             return dict(account)
+
+
+def _ten_minutes_ago() -> str:
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def key_public(key: dict) -> dict:
+    return {k: key.get(k) for k in ("id", "name", "created_at", "last_used")}
 
 
 def public(account: dict) -> dict:
