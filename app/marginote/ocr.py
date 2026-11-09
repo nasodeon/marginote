@@ -5,6 +5,7 @@ import importlib.util
 import io
 import os
 import re
+import threading
 from dataclasses import asdict, dataclass
 
 # One thread is the fastest for a single page (measured), and leaves the other cores free.
@@ -44,6 +45,9 @@ def _open_heic_too() -> bool:
     register_heif_opener()
     return True
 
+# One page at a time (a photo read, a scanned PDF page, a big export): memory stays predictable, about
+# 140 MB above idle at most, even if several arrive at once.
+OCR_SLOT = threading.Semaphore(1)
 MAX_SIDE = 2400  # long edge after resizing: sharp enough for OCR, ~0.5 MB as JPEG
 
 

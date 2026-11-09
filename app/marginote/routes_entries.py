@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import db, ocr
+from . import db, documents, ocr
 from .context import Context, Library
 from .views import ENTRY_SQL, entry_dict, entry_dicts, entries_where, load_photo, load_source
 
@@ -99,6 +99,10 @@ def router(ctx: Context) -> APIRouter:
                 text = ocr.select_range(words, body.word_start, body.word_end) or None
             if not page:
                 page = photo["detected_page"]
+            if not page and photo["document_id"]:      # a PDF's page with no number printed on it
+                row = conn.execute("SELECT s.pages FROM documents d LEFT JOIN sources s ON s.id = d.source_id "
+                                   "WHERE d.id = ?", (photo["document_id"],)).fetchone()
+                page = documents.page_label(photo["page_index"], None, row[0] if row else None)
         if not text:
             raise HTTPException(422, "Give the text, or a photo_id with word_start and word_end")
         stamp = db.now()

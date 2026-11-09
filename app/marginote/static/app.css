@@ -593,3 +593,24 @@ pre.code { margin: 0; padding: 10px 12px; background: var(--tint); font-family: 
   .pick-pad, .pick-list { padding-left: 40px; padding-right: 40px; }
   .export-go { bottom: 0; padding-left: 40px; padding-right: 40px; }
 }
+
+/* ---------- PDFs ---------- */
+.doc-name { display: flex; align-items: center; gap: 8px; margin: 0; overflow-wrap: anywhere; }
+.doc-name svg { flex: none; }
+.found-card { display: flex; flex-direction: column; gap: 4px; padding: 12px 0; border-top: 0.6px solid var(--rule); border-bottom: 0.6px solid var(--rule); }
+.found-card .sc { color: var(--grey); }
+.found-card .t { font-size: 20px; line-height: 1.25; }
+.found-card .muted { color: var(--grey); font-size: 15px; overflow-wrap: anywhere; }
+.found-card .note-line { margin-top: 4px; }
+.kept { position: absolute; background: var(--mark-edge); pointer-events: none; }
+.page-turn { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.page-turn .link-btn { min-height: 40px; font-size: 16px; }
+.kept-count { flex: 1; text-align: center; font-size: 14px; color: var(--grey); }
+.doc-rows { display: flex; flex-direction: column; }
+.doc-row { display: flex; align-items: center; gap: 8px; min-height: 40px; color: var(--ink); text-decoration: none; font-size: 16px; }
+.doc-row svg { flex: none; }
+.doc-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline; text-decoration-thickness: 0.6px; text-underline-offset: 2px; }
+.doc-row .muted { flex: none; color: var(--grey); font-size: 14px; }
+.inbox-row.doc { color: var(--ink); text-decoration: none; }
+.inbox-row.doc .thumb { display: flex; align-items: center; justify-content: center; height: 64px; }
+label.pick { cursor: pointer; }

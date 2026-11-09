@@ -38,6 +38,10 @@ class Settings:
         return self.data_dir / "covers"
 
     @property
+    def pdfs_dir(self) -> Path:
+        return self.data_dir / "pdfs"
+
+    @property
     def backups_dir(self) -> Path:
         return self.data_dir / "backups"
 

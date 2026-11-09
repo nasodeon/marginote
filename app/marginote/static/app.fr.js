@@ -54,6 +54,7 @@ const ICONS = {
   said: 'M4 5h16v11h-9l-5 4v-4H4z',
   inbox: 'M4 13h4l2 3h4l2-3h4M4 13l2-8h12l2 8v6H4z',
   download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+  pdf: 'M6 3h9l4 4v14H6zM15 3v4h4M9 17v-5h1.5a1.5 1.5 0 0 1 0 3H9',
 };
 function icon(name, size = 18) {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -787,8 +788,8 @@ function foldable(key, head, body, startFolded = false) {
 
 async function viewSource({ args: [id] }) {
   const order = prefs.get('sourceOrder', 'page');
-  const [source, entries, notes] = await Promise.all([api(`/api/sources/${id}`), api(`/api/sources/${id}/entries?order=${order}`),
-    api(`/api/notes?source_id=${id}&order=place`)]);
+  const [source, entries, notes, docs] = await Promise.all([api(`/api/sources/${id}`), api(`/api/sources/${id}/entries?order=${order}`),
+    api(`/api/notes?source_id=${id}&order=place`), api(`/api/documents?source_id=${id}`)]);
   nav.label(shorten(source.title, 24));
   const k = kindOf(source);
   const fresh = nav.flash.entry || null;
@@ -931,9 +932,14 @@ async function viewSource({ args: [id] }) {
     people.about.length ? h('span', { class: 'meta' }, 'sur ', personLinks(people.about)) : null,
     source.topics.length ? topicLinks(source.topics) : null,
     counts ? h('span', { class: 'counts', text: counts }) : null,
+    docs.length ? h('div', { class: 'doc-rows' }, docs.map((d) => h('a', { class: 'doc-row', href: `#/document/${d.id}` }, icon('pdf', 18),
+      h('span', { class: 't', text: d.name }),
+      h('span', { class: 'muted', text: d.status === 'reading' ? 'en cours de lecture…' : joinDots([plural(d.pages, 'page'), d.entry_count ? `${d.entry_count} gardé${d.entry_count > 1 ? 's' : ''}` : null]).join('') })))) : null,
     h('div', { class: 'actions' },
       h('a', { class: 'btn primary small', href: `#/capture?source=${source.id}` }, '+ Ajouter'),
       h('a', { class: 'btn small', href: `#/note/new?source=${source.id}` }, '+ Note'),
+      !docs.length && ['article', 'book', 'ebook', 'other'].includes(source.kind)
+        ? h('label', { class: 'btn small file-btn' }, '+ PDF', pdfInput(source.id)) : null,
       source.url ? h('a', { class: 'btn small', href: source.url, target: '_blank', rel: 'noopener noreferrer' },
         k.link && source.kind !== 'article' ? `Ouvrir ${k.the}` : 'Ouvrir le lien', icon('external', 14)) : null,
       entries.length || notes.length ? h('a', { class: 'btn small', href: `/api/sources/${source.id}/export.md`, download: '' }, 'Exporter') : null,
@@ -1197,7 +1203,7 @@ async function viewEntry({ args: [id] }) {
       h('p', { class: 'cite muted', text: citation(e, source) }),
       h('div', { class: 'row-btns' },
         h('a', { class: 'btn small', href: `#/entry/${id}/edit` }, 'Modifier'),
-        e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo` }, 'Photo') : null,
+        e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo` }, e.photo_document ? 'Voir dans le PDF' : 'Photo') : null,
         h('button', { class: 'btn small', type: 'button', onclick: copy }, 'Copier'),
         h('a', { class: 'btn small', href: `#/note/new?entry=${e.id}` }, '+ Note'),
         h('button', { class: 'btn small danger', type: 'button', onclick: del }, 'Supprimer…'))));
@@ -1296,7 +1302,8 @@ async function viewEntryEdit({ args: [id] }) {
     h('div', { class: 'details' },
       h('label', { class: 'field', for: 'f-text' }, h('span', { text: 'passage' }), text),
       fields.els,
-      e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo`, style: { alignSelf: 'flex-start' } }, 'Changer la sélection sur la photo') : null,
+      e.photo_id ? h('a', { class: 'btn small', href: `#/entry/${id}/photo`, style: { alignSelf: 'flex-start' } },
+        e.photo_document ? 'Modifier la sélection dans le PDF' : 'Changer la sélection sur la photo') : null,
       msg,
       h('button', { class: 'btn primary big', type: 'submit' }, 'Enregistrer')));
   return { el, bare: !isWide(), nav: 'quotes' };
@@ -1306,7 +1313,8 @@ async function viewEntryPhoto({ args: [id] }) {
   const e = await api(`/api/entries/${id}`);
   if (!e.photo_id) { nav.replace(`entry/${id}`); return null; }
   const photo = await api(`/api/photos/${e.photo_id}`);
-  nav.label('Photo');
+  const pdf = photo.document;
+  nav.label(pdf ? 'PDF' : 'Photo');
   const preview = h('p', { class: 'sel-preview' });
   const saveBtn = h('button', { class: 'btn primary', type: 'button', disabled: true }, 'Utiliser cette sélection');
   let range = null;
@@ -1327,10 +1335,15 @@ async function viewEntryPhoto({ args: [id] }) {
       nav.back(`entry/${id}`);
     } catch (err) { toast(err.message); }
   });
+  const docLinks = pdf ? h('div', { class: 'page-turn' },
+    pdf.previous ? h('a', { class: 'link-btn', href: `#/document/${pdf.id}?page=${pdf.index - 1}` }, icon('left', 18), 'page précédente') : h('span'),
+    h('a', { class: 'link-btn', href: `${(await api(`/api/documents/${pdf.id}`)).file_url}#page=${pdf.index + 1}`, target: '_blank', rel: 'noopener' },
+      'Ouvrir le PDF ici', icon('external', 14)),
+    pdf.next ? h('a', { class: 'link-btn', href: `#/document/${pdf.id}?page=${pdf.index + 1}` }, 'page suivante', icon('right', 18)) : h('span')) : null;
   const el = h('div', { class: 'fill-screen' },
-    bar(backButton(`entry/${id}`, 'Citation'), e.page ? where(e) : ''),
+    bar(backButton(`entry/${id}`, 'Citation'), pdf ? joinDots([e.page ? where(e) : null, `page ${pdf.index + 1} du PDF`]).join('') : e.page ? where(e) : ''),
     sel.el,
-    h('div', { class: 'sel-sheet' }, preview, nudgeBar(sel), saveBtn));
+    h('div', { class: 'sel-sheet' }, preview, nudgeBar(sel), saveBtn, docLinks));
   return { el, bare: true, cleanup: () => sel.destroy() };
 }
 
@@ -1364,7 +1377,7 @@ function joinWords(words) {
   return out.replace(/\s+([,.)\]…”])/g, '$1').replace(/([“(\[])\s+/g, '$1').trim();
 }
 
-function makeSelector(photo, { start = null, end = null, onChange = () => {}, startMode = null } = {}) {
+function makeSelector(photo, { start = null, end = null, onChange = () => {}, startMode = null, kept = [] } = {}) {
   const words = [];
   for (const w of photo.words) words[w.i] = w;
   const lines = linesOf(photo.words);
@@ -1382,9 +1395,10 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
   const img = h('img', { src: photo.image_url, alt: 'Photo de la page', draggable: 'false' });
   const wordLayer = h('div', { class: 'layer', 'aria-hidden': 'true' });
   const markLayer = h('div', { class: 'layer', 'aria-hidden': 'true' });
+  const keptLayer = h('div', { class: 'layer', 'aria-hidden': 'true' });
   const startDot = h('div', { class: 'handle start', title: 'Glisser pour déplacer le début' });
   const endDot = h('div', { class: 'handle end', title: 'Glisser pour déplacer la fin' });
-  const stage = h('div', { class: 'photo-stage' }, img, wordLayer, markLayer, startDot, endDot);
+  const stage = h('div', { class: 'photo-stage' }, img, wordLayer, keptLayer, markLayer, startDot, endDot);
   const scroller = h('div', { class: 'photo-scroll' }, stage);
   const textPane = h('div', { class: 'text-pick' });
   const root = h('div', { class: 'selector' }, modes, scroller, textPane);
@@ -1501,6 +1515,18 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
     endDot.style.setProperty('--stem', `${Math.max(8, b.h * scale + 3)}px`);
   }
 
+  // passages already kept from this page: a line in the margin beside them
+  function drawKept() {
+    put(keptLayer);
+    for (const [a, b] of kept) {
+      const span = words.slice(a, b + 1).filter(Boolean);
+      if (!span.length) continue;
+      const top = Math.min(...span.map((w) => w.y)), bottom = Math.max(...span.map((w) => w.y + w.h));
+      const left = Math.min(...lines.filter((l) => l.words.some((w) => w.i >= a && w.i <= b)).map((l) => l.left));
+      keptLayer.append(h('div', { class: 'kept', style: box(Math.max(0, left - photo.width * 0.018), top, photo.width * 0.006, bottom - top) }));
+    }
+  }
+
   function markText() {
     buttons.forEach((b, i) => {
       if (!b) return;
@@ -1550,6 +1576,7 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
   }
 
   img.addEventListener('load', () => drawMarks());
+  drawKept();
   const onResize = debounce(() => { sizeStage(); drawMarks(); }, 150);
   window.addEventListener('resize', onResize);
   sizeStage();
@@ -1559,6 +1586,8 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
     el: root,
     nudge,
     get range() { return s == null ? null : { start: s, end: e }; },
+    setKept(list) { kept = list; drawKept(); },
+    clear() { s = e = null; phase = 'none'; update(); },
     destroy() { window.removeEventListener('resize', onResize); },
   };
 }
@@ -1722,6 +1751,9 @@ async function viewCapture({ params }) {
       h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'nouveau' })),
       newRow('book', 'Livre ou livre numérique', 'Photo d’une page ou capture d’écran ; le livre par son ISBN ou son dos',
         () => go(`source/new?kind=book&then=capture${carry ? '&' + carry : ''}`)),
+      h('label', { class: 'pick file-btn' }, h('span', { class: 'slot small icon-slot' }, icon('pdf', 26)),
+        h('span', { class: 'main' }, h('span', { class: 't', text: 'PDF' }),
+          h('span', { class: 'a', text: 'Un article ou un livre en PDF : reconnu, gardé, puis lu page par page' })), pdfInput(null)),
       newRow('link', 'Lien', 'Article, vidéo ou podcast : collez le lien, ou partagez-le depuis l’app', () => stepLink('')),
       newRow('class', 'Cours', 'Un cours que vous suivez : des notes par séance, et des citations',
         () => go(`source/new?kind=class&then=capture${carry ? '&' + carry : ''}`)),
@@ -1762,10 +1794,15 @@ async function viewCapture({ params }) {
     if (!k.photos) { stepDetails(null, false, k.notesFirst ? 'note' : 'quote'); return; }
     const fileInput = (useCamera) => h('input', { type: 'file', accept: 'image/*', capture: useCamera ? 'environment' : null,
       'aria-label': useCamera ? 'Prendre une photo' : 'Choisir une photo', onchange: (ev) => { const f = ev.target.files[0]; if (f) send(f); } });
-    const drop = h('div', { class: 'drop wide-only' }, 'ou déposez ici une photo ou une capture d’écran');
+    const drop = h('div', { class: 'drop wide-only' }, 'ou déposez ici une photo, une capture d’écran ou un PDF');
     for (const t of ['dragenter', 'dragover']) drop.addEventListener(t, (ev) => { ev.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-    drop.addEventListener('drop', (ev) => { ev.preventDefault(); drop.classList.remove('over'); const f = ev.dataTransfer.files[0]; if (f) send(f); });
+    drop.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      drop.classList.remove('over');
+      const f = ev.dataTransfer.files[0];
+      if (f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name))) sendPdf(f, s.id); else if (f) send(f);
+    });
     put(root,
       bar(startedHere ? backTo(home) : leave(), ''),
       h('div', { class: 'capture-start' },
@@ -1777,6 +1814,7 @@ async function viewCapture({ params }) {
             h('label', { class: 'btn big file-btn' }, icon('image', 20), s.kind === 'ebook' ? 'Choisir une capture d’écran' : 'Choisir une photo', fileInput(false))]
           : [h('label', { class: `btn ${k.notesFirst ? '' : 'primary '}big file-btn` }, icon('image', 20), 'Choisir une photo ou une capture d’écran', fileInput(false)), drop],
         h('button', { class: 'btn big', type: 'button', onclick: () => stepLater(s) }, icon('inbox', 20), 'Plusieurs pages, à trier plus tard'),
+        h('label', { class: 'btn big file-btn' }, icon('pdf', 20), 'Son PDF', pdfInput(s.id)),
         h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null) }, icon('pen', 20), 'Taper une citation'),
         k.notesFirst ? null : h('button', { class: 'btn big', type: 'button', onclick: () => stepDetails(null, false, 'note') }, icon('note', 20), 'Écrire une note')));
     delete root.dataset.error;
@@ -2187,7 +2225,7 @@ async function viewCapture({ params }) {
 }
 
 async function viewInbox() {
-  const photos = await api('/api/photos');
+  const [photos, docs] = await Promise.all([api('/api/photos'), api('/api/documents?queued=true')]);
   nav.label('À trier');
   const done = async (p) => {
     if (p.entry_count) {
@@ -2201,12 +2239,23 @@ async function viewInbox() {
     await api(`/api/photos/${p.id}`, { method: 'DELETE' }).catch((err) => toast(err.message));
     render();
   };
-  if (photos.some((p) => p.status === 'reading')) {   // check again until every page is read
+  if (photos.some((p) => p.status === 'reading') || docs.some((d) => d.status === 'reading')) {   // check again until every page is read
     const mark = location.hash;
     setTimeout(() => { if (location.hash === mark) render(); }, 3000);
   }
   const el = h('div', {},
-    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'À trier', h('span', { class: 'count', text: photos.length })))),
+    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'À trier', h('span', { class: 'count', text: photos.length + docs.length })))),
+    docs.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'PDF à trier' })),
+      docs.map((d) => h('a', { class: 'inbox-row doc', href: `#/document/${d.id}` },
+        h('span', { class: 'thumb icon-slot' }, icon('pdf', 30)),
+        h('div', { class: 'main' },
+          h('span', { class: 't', text: d.found?.source?.title || d.found?.title || d.name }),
+          h('span', { class: 'a' }, joinDots([
+            d.name,
+            d.status === 'reading' ? h('i', { text: `en lecture… ${d.read_pages}/${d.pages}` }) : plural(d.pages, 'page'),
+            d.status === 'failed' ? h('i', { class: 'bad', text: 'illisible' }) : null,
+            d.existing ? h('i', { text: 'déjà dans votre bibliothèque' }) : d.found?.source ? h('i', { text: 'reconnu' }) : null,
+          ])))))] : null,
     photos.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'pages à trier' })),
       photos.map((p) => h('div', { class: 'inbox-row' },
         h('img', { class: 'thumb', src: p.thumb_url, alt: '', loading: 'lazy' }),
@@ -2223,8 +2272,214 @@ async function viewInbox() {
             p.status === 'ready' ? h('a', { class: 'btn primary small', href: `#/capture?photo=${p.id}` }, 'Trier') : null,
             h('button', { class: 'btn small', type: 'button', onclick: () => done(p) }, p.entry_count ? 'Terminé' : 'Retirer…'))))),
       h('div', { class: 'list-end' })]
-      : h('div', { class: 'empty' }, 'Rien à trier.', h('a', { class: 'btn', href: '#/capture' }, 'Ajouter')));
+      : docs.length ? null : h('div', { class: 'empty' }, 'Rien à trier.', h('a', { class: 'btn', href: '#/capture' }, 'Ajouter')));
   return { el, nav: 'inbox' };
+}
+
+// ----- a PDF: read on the server, recognised, then its pages used like photos -----
+
+// Send a PDF; its page opens and follows the reading.
+async function sendPdf(file, sourceId = null, { replace = false } = {}) {
+  if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { toast('Choisissez un fichier PDF'); return; }
+  toast(`Envoi de ${file.name}…`);
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const doc = await api(`/api/documents${sourceId ? `?source_id=${sourceId}` : ''}`, { method: 'POST', form });
+    document.querySelector('.toast')?.remove();
+    if (replace) nav.replace(`document/${doc.id}`); else go(`document/${doc.id}`);
+  } catch (err) { toast(err.message); }
+}
+
+function pdfInput(sourceId, opts) {
+  return h('input', { type: 'file', accept: 'application/pdf,.pdf', 'aria-label': 'Choisir un PDF',
+    onchange: (ev) => { const f = ev.target.files[0]; ev.target.value = ''; if (f) sendPdf(f, sourceId, opts); } });
+}
+
+const foundBy = { doi: 'au DOI', arxiv: 'au numéro arXiv', isbn: 'à l’ISBN' };
+
+async function viewDocument({ args: [id], params }) {
+  let doc = await api(`/api/documents/${id}`);
+  nav.label('PDF');
+  const root = h('div', { class: 'doc-view' });
+  let selector = null;
+  const cleanup = () => { selector?.destroy(); selector = null; };
+  const back = () => (doc.source ? backButton(`source/${doc.source.id}`, shorten(doc.source.title, 22)) : backButton('inbox', 'À trier'));
+  const reload = async () => { doc = await api(`/api/documents/${id}`); };
+  const remove = async () => {
+    const ok = await confirmDialog({ title: 'Supprimer ce PDF ?', text: doc.entry_count
+      ? `Ce que vous en avez gardé (${plural(doc.entry_count, 'quote')}) reste, avec sa page.` : 'Rien n’en a encore été gardé.',
+    choices: [{ label: 'Supprimer le PDF', value: true, danger: true }] });
+    if (!ok) return;
+    try {
+      await api(`/api/documents/${id}`, { method: 'DELETE' });
+      store.changed();
+      toast('PDF supprimé');
+      nav.back(doc.source ? `source/${doc.source.id}` : 'inbox');
+    } catch (err) { toast(err.message); }
+  };
+  const giveSource = async (sourceId) => {
+    try {
+      doc = await api(`/api/documents/${id}`, { method: 'PATCH', body: { source_id: sourceId } });
+      store.changed();
+      pages(0);
+    } catch (err) { toast(err.message); }
+  };
+
+  function reading() {
+    cleanup();
+    put(root, bar(back(), 'PDF'),
+      h('div', { class: 'capture-start' },
+        h('p', { class: 'doc-name' }, icon('pdf', 22), h('span', { text: doc.name })),
+        h('div', { class: 'status-line', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }),
+          `Lecture du PDF… ${doc.read_pages} sur ${plural(doc.pages, 'page')}`),
+        h('p', { class: 'note-line', text: 'Vous pouvez quitter cette page : la lecture continue, et le PDF attend dans « À trier ».' })));
+    const mark = location.hash;
+    setTimeout(async () => {
+      if (location.hash !== mark) return;
+      try { await reload(); } catch { return; }
+      if (location.hash === mark) show();
+    }, 1500);
+  }
+
+  function failed() {
+    put(root, bar(back(), 'PDF'),
+      h('div', { class: 'capture-start' },
+        h('p', { class: 'doc-name' }, icon('pdf', 22), h('span', { text: doc.name })),
+        h('div', { class: 'error', role: 'alert', text: 'Ce PDF n’a pas pu être lu.' }),
+        h('button', { class: 'btn danger', type: 'button', onclick: remove, style: { alignSelf: 'flex-start' } }, 'Le supprimer')));
+  }
+
+  // what the PDF is: recognised from what is printed in it, or chosen
+  function recognise(notThis = false) {
+    cleanup();
+    const f = doc.found;
+    const src = notThis ? null : f.source;
+    const ex = notThis ? null : doc.existing;
+    const sent = h('p', { class: 'doc-name' }, icon('pdf', 22), h('span', { text: doc.name }), h('span', { class: 'muted', text: ` · ${plural(doc.pages, 'page')}` }));
+    const how = f.by ? `Trouvé grâce ${foundBy[f.by]} imprimé en page ${(f.page ?? 0) + 1}` : null;
+    let card = null;
+    if (ex) {
+      card = [h('div', { class: 'found-card' },
+        h('span', { class: 'sc', text: 'déjà dans votre bibliothèque' }),
+        h('b', { class: 't', text: ex.title })),
+      h('button', { class: 'btn primary big', type: 'button', onclick: () => giveSource(ex.id) }, 'Oui, c’est bien ça'),
+      h('button', { class: 'btn big', type: 'button', onclick: () => recognise(true) }, 'Ce n’est pas ça…')];
+    } else if (src) {
+      const names = src.people?.author || [];
+      const create = async (ev) => {
+        ev.currentTarget.disabled = true;
+        try {
+          const body = { ...src, fetch_cover: src.kind === 'book' };
+          delete body.found_by;
+          const made = await api('/api/sources', { method: 'POST', body });
+          await giveSource(made.id);
+        } catch (err) { ev.currentTarget.disabled = false; toast(err.message); }
+      };
+      card = [h('div', { class: 'found-card' },
+        h('span', { class: 'sc', text: src.kind === 'book' ? 'livre reconnu' : 'article reconnu' }),
+        h('b', { class: 't', text: src.title }),
+        names.length ? h('span', { text: names.length > 3 ? `${names.slice(0, 3).join(', ')} et ${names.length - 3} autres` : names.join(', ') }) : null,
+        inJournal(src) || src.publisher ? h('i', { text: [inJournal(src) || src.publisher, src.year].filter(Boolean).join(', ') }) : null,
+        src.doi ? h('span', { class: 'muted', text: `doi:${src.doi}` }) : null,
+        how ? h('span', { class: 'note-line', text: `${how}, puis complété par ${src.found_by}.` }) : null),
+      h('button', { class: 'btn primary big', type: 'button', onclick: create }, 'C’est bien ça'),
+      h('button', { class: 'btn big', type: 'button', onclick: () => recognise(true) }, 'Ce n’est pas ça…'),
+      names.length ? h('p', { class: 'note-line', text: 'Ses auteurs rejoignent vos personnes ; ceux qui y sont déjà ne sont pas doublés.' }) : null];
+    }
+    const q = h('input', { type: 'search', placeholder: 'Chercher une source', 'aria-label': 'Chercher une source' });
+    const list = h('div');
+    const drawList = async () => {
+      const sources = await store.sources();
+      const needle = fold(q.value.trim());
+      put(list, sources.filter((x) => !needle || fold(`${x.title} ${makers(x).map((m) => m.name).join(' ')}`).includes(needle)).slice(0, needle ? 30 : 6)
+        .map((x) => h('button', { type: 'button', class: 'pick', onclick: () => giveSource(x.id) }, thumb(x),
+          h('span', { class: 'main' }, h('span', { class: 't', text: x.title }), h('span', { class: 'a' }, sourceLine(x))))));
+    };
+    q.addEventListener('input', debounce(drawList, 120));
+    const guess = f.title || doc.name.replace(/\.pdf$/i, '');
+    const newHref = `#/source/new?kind=${src?.kind === 'book' || f.by === 'isbn' ? 'book' : 'article'}&title=${encodeURIComponent(guess)}&document=${id}`;
+    const unreachable = f.note && /reached/.test(f.note);
+    put(root, bar(back(), card ? 'Reconnu' : 'Quelle source ?'),
+      h('div', { class: 'capture-start' },
+        h('h1', { class: 'ask', text: card ? 'Est-ce bien ça ?' : 'D’où vient ce passage ?' }),
+        sent,
+        card || [
+          f.note ? h('p', { class: 'note-line', text: `${f.note}.` }) : null,
+          unreachable ? h('button', { class: 'btn small', type: 'button', style: { alignSelf: 'flex-start' }, onclick: async () => {
+            try { doc = await api(`/api/documents/${id}/recognize`, { method: 'POST' }); show(); } catch (err) { toast(err.message); }
+          } }, 'Chercher à nouveau') : null,
+          f.title && !notThis ? h('p', { class: 'note-line' }, 'Son titre semble être ', h('i', { text: `« ${f.title} »` }), '.') : null,
+          h('a', { class: 'btn primary big', href: newHref }, '+ Nouvelle source')]),
+      card ? null : [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'ou dans votre bibliothèque' })),
+        h('div', { class: 'pad' }, h('label', { class: 'search' }, icon('search', 16), q)), list],
+      h('div', { class: 'pad' }, h('button', { class: 'btn small danger', type: 'button', onclick: remove, style: { alignSelf: 'flex-start' } }, 'Supprimer ce PDF…')));
+    if (!card) drawList();
+  }
+
+  // the pages, one at a time: choose a passage, keep it
+  async function pages(index) {
+    cleanup();
+    const all = doc.page_list;
+    index = Math.max(0, Math.min(index, all.length - 1));
+    prefs.set(`docPage.${id}`, index);
+    const meta = all[index];
+    const [photo, entries] = await Promise.all([api(`/api/photos/${meta.photo_id}`), api(`/api/sources/${doc.source.id}/entries`)]);
+    const kept = entries.filter((e) => e.photo_id === photo.id && e.word_start != null).map((e) => [e.word_start, e.word_end]);
+    let range = null;
+    const preview = h('p', { class: 'sel-preview empty', text: 'Touchez le premier mot, puis le dernier.' });
+    const keptLine = h('span', { class: 'kept-count' });
+    const showCount = () => { keptLine.textContent = joinDots([kept.length ? `${kept.length} gardé${kept.length > 1 ? 's' : ''} sur cette page` : null, doc.entry_count ? `${doc.entry_count} dans le PDF` : null]).join(''); };
+    showCount();
+    const keep = h('button', { class: 'btn primary big', type: 'button', disabled: true }, 'Garder ce passage');
+    keep.addEventListener('click', async () => {
+      if (!range) return;
+      keep.disabled = true;
+      try {
+        const e = await api('/api/entries', { method: 'POST', body: { source_id: doc.source.id, photo_id: photo.id,
+          word_start: range.start, word_end: range.end, page: meta.page } });
+        store.changed();
+        kept.push([range.start, range.end]);
+        doc.entry_count += 1;
+        meta.entry_count += 1;
+        selector.setKept(kept);
+        selector.clear();
+        showCount();
+        toast('Gardé', { label: 'Ajouter un commentaire', run: () => go(`entry/${e.id}/edit`) });
+      } catch (err) { keep.disabled = false; toast(err.message); }
+    });
+    selector = makeSelector(photo, { kept, onChange: (r) => {
+      range = r.phase === 'none' ? null : { start: r.start, end: r.end };
+      preview.textContent = r.text || 'Touchez le premier mot, puis le dernier.';
+      preview.classList.toggle('empty', !r.text);
+      keep.disabled = !range;
+      keep.textContent = range ? `Garder ce passage · ${plural(r.end - r.start + 1, 'word')}` : 'Garder ce passage';
+    } });
+    const prev = all[index - 1], next = all[index + 1];
+    put(root,
+      bar(back(), `p. ${meta.page} · ${index + 1}/${all.length}`,
+        h('a', { class: 'link-btn', href: `${doc.file_url}#page=${index + 1}`, target: '_blank', rel: 'noopener' }, 'Ouvrir', icon('external', 14))),
+      selector.el,
+      h('div', { class: 'sel-sheet' }, preview, nudgeBar(selector), keep,
+        h('div', { class: 'page-turn' },
+          prev ? h('button', { class: 'link-btn', type: 'button', onclick: () => pages(index - 1) }, icon('left', 18), `p. ${prev.page}`) : h('span'),
+          keptLine,
+          next ? h('button', { class: 'link-btn', type: 'button', onclick: () => pages(index + 1) }, `p. ${next.page}`, icon('right', 18)) : h('span'))));
+    root.classList.add('fill-screen');
+  }
+
+  function show() {
+    root.classList.remove('fill-screen');
+    if (doc.status === 'reading') reading();
+    else if (doc.status === 'failed') failed();
+    else if (!doc.source) recognise();
+    else {
+      const at = params.get('page') != null ? Number(params.get('page')) : prefs.get(`docPage.${id}`, 0);
+      pages(Number.isFinite(at) ? at : 0);
+    }
+  }
+  show();
+  return { el: root, bare: true, cleanup };
 }
 
 // ----- adding or editing a source -----
@@ -2241,7 +2496,7 @@ async function viewSourceForm({ args: [id], params }) {
   const carry = ['about', 'topic', 'shared'].filter((k) => params.get(k)).map((k) => `&${k}=${params.get(k)}`).join('');
   const isbn = field('s-isbn', 'isbn', { inputmode: 'numeric', autocomplete: 'off' }, s.isbn);
   const url = field('s-url', 'lien', { type: 'url', inputmode: 'url', autocapitalize: 'none', autocorrect: 'off', placeholder: 'https://…' }, s.url);
-  const title = field('s-title', 'titre', { required: true, autocapitalize: 'sentences' }, s.title);
+  const title = field('s-title', 'titre', { required: true, autocapitalize: 'sentences' }, s.title || params.get('title') || '');
   const subtitle = field('s-subtitle', 'sous-titre', {}, s.subtitle);
   const fields = [...new Set(sources.map((x) => x.field).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const fieldIn = field('s-field', 'genre', { list: 'fields', autocomplete: 'off', autocapitalize: 'sentences', placeholder: 'Philosophie, Roman, Histoire…' }, s.field);
@@ -2420,7 +2675,10 @@ async function viewSourceForm({ args: [id], params }) {
       } else {
         const created = await api('/api/sources', { method: 'POST', body: { ...body, cover_url: coverUrl } });
         store.changed();
-        if (params.get('then') === 'capture') nav.replace(`capture?source=${created.id}${carry}`);
+        if (params.get('document')) {        // a PDF waiting for the source it is
+          await api(`/api/documents/${params.get('document')}`, { method: 'PATCH', body: { source_id: created.id } });
+          nav.replace(`document/${params.get('document')}`);
+        } else if (params.get('then') === 'capture') nav.replace(`capture?source=${created.id}${carry}`);
         else {
           nav.flash = { cover: created.cover_pending ? created.id : null };
           nav.replace(`source/${created.id}`);
@@ -3145,6 +3403,7 @@ const ROUTES = [
   [/^note\/(\d+)\/edit$/, viewNoteForm],
   [/^capture$/, viewCapture, (params) => ![...params.keys()].length],
   [/^inbox$/, viewInbox, true],
+  [/^document\/([0-9a-f]+)$/, viewDocument],
   [/^settings$/, viewSettings, true],
   [/^export$/, viewExport],
   // addresses of earlier versions, from bookmarks or the home screen

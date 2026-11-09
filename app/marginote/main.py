@@ -21,7 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import backup, dewarp, export_pdf, ocr, routes_admin, routes_entries, routes_export, routes_library, routes_photos
+from . import (backup, dewarp, export_pdf, ocr, routes_admin, routes_documents, routes_entries, routes_export, routes_library,
+               routes_photos)
 from .accounts import LANGUAGES, OWNER, check_password, public
 from .config import Settings, load_settings
 from .context import Context
@@ -260,7 +261,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             folder.rename(aside / f"{account['id']}-{time.strftime('%Y-%m-%d')}")
         return {"removed": account_id}
 
-    for module in (routes_library, routes_entries, routes_photos, routes_admin, routes_export):
+    for module in (routes_library, routes_entries, routes_photos, routes_documents, routes_admin, routes_export):
         app.include_router(module.router(ctx))
 
     app.mount("/static", StaticAssets(directory=STATIC), name="static")

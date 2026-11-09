@@ -123,7 +123,8 @@ def source_brief(row) -> dict:
 # ---------- entries ----------
 
 ENTRY_SQL = f"""
-SELECT e.*, s.title AS source_title, s.kind AS source_kind, s.url AS source_url, {db.BY_SQL} AS by_id
+SELECT e.*, s.title AS source_title, s.kind AS source_kind, s.url AS source_url, {db.BY_SQL} AS by_id,
+       (SELECT ph.document_id FROM photos ph WHERE ph.id = e.photo_id) AS photo_document
 FROM entries e LEFT JOIN sources s ON s.id = e.source_id
 """
 
@@ -192,6 +193,7 @@ def entry_dicts(conn, rows) -> list[dict]:
             "link": passage_link(r["source_url"], r["source_kind"], r["text"]) if r["source_id"] else None,
             "photo_id": r["photo_id"],
             "photo_url": f"/api/photos/{r['photo_id']}/image" if r["photo_id"] else None,
+            "photo_document": r["photo_document"],                       # set when the page is a PDF's
             "word_start": r["word_start"],
             "word_end": r["word_end"],
             "created_at": r["created_at"],

@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import typst
 from fastapi.testclient import TestClient
 from itsdangerous import TimestampSigner
 
@@ -38,10 +39,12 @@ def fill_owner_library(c: TestClient) -> dict:
     said = c.post("/api/entries", json={"text": f"Parole {MARK}", "words_by": f"Orateur {MARK}"}).json()
     note = c.post("/api/notes", json={"text": f"Note {MARK}", "sources": [src["id"]], "entries": [quote["id"]]}).json()
     photo = c.post("/api/photos?later=true", files={"file": ("p.jpg", make_page(), "image/jpeg")}).json()
+    pdf = typst.compile(f"Un article de {MARK}, avec assez de mots pour être lu comme un texte véritable.".encode())
+    doc = c.post("/api/documents", files={"file": (f"Article {MARK}.pdf", pdf, "application/pdf")}).json()
     people = {p["name"]: p["id"] for p in c.get("/api/people").json()}
     topic = c.get("/api/topics").json()[0]
     return {"source": src["id"], "quote": quote["id"], "said": said["id"], "note": note["id"], "photo": photo["id"],
-            "person": people[f"Auteur {MARK}"], "topic": topic["id"]}
+            "person": people[f"Auteur {MARK}"], "topic": topic["id"], "doc": doc["id"]}
 
 
 def test_owner_logs_in_as_before_and_old_cookies_still_work(settings):
@@ -89,13 +92,13 @@ def test_nobody_reaches_anyone_elses_library(settings):
         cid = c.post("/api/accounts", json={"name": "Camille", "password": "lune-de-miel"}).json()["id"]
         login(c, "Camille", "lune-de-miel")
         # her library starts empty
-        for path in ("/api/sources", "/api/entries", "/api/notes", "/api/people", "/api/topics", "/api/photos"):
+        for path in ("/api/sources", "/api/entries", "/api/notes", "/api/people", "/api/topics", "/api/photos", "/api/documents"):
             assert c.get(path).json() == [], path
         assert c.get("/api/search", params={"q": "zephyrin"}).json() == []
         assert c.get("/api/notes", params={"q": "zephyrin"}).json() == []
         # every call of the API, with the owner's ids put in: nothing of the owner's comes back
         ids = {"source_id": owned["source"], "entry_id": owned["quote"], "note_id": owned["note"],
-               "photo_id": owned["photo"], "person_id": owned["person"], "topic_id": owned["topic"]}
+               "photo_id": owned["photo"], "person_id": owned["person"], "topic_id": owned["topic"], "doc_id": owned["doc"]}
         tried = 0
         for route, ops in c.get("/openapi.json").json()["paths"].items():
             if "get" not in ops or not route.startswith("/api/") or route in ("/api/backup/download", "/api/lookup/isbn"):
@@ -111,7 +114,8 @@ def test_nobody_reaches_anyone_elses_library(settings):
             assert "zephyrin" not in r.content.decode("utf-8", "replace").lower(), path
         assert tried >= 20
         for path in (f"/api/sources/{owned['source']}", f"/api/entries/{owned['quote']}", f"/api/notes/{owned['note']}",
-                     f"/api/photos/{owned['photo']}/image", f"/api/sources/{owned['source']}/cover"):
+                     f"/api/photos/{owned['photo']}/image", f"/api/sources/{owned['source']}/cover",
+                     f"/api/documents/{owned['doc']}", f"/api/documents/{owned['doc']}/file"):
             assert c.get(path).status_code == 404, path
         # nor can she change or delete it
         assert c.patch(f"/api/entries/{owned['quote']}", json={"text": "x"}).status_code == 404
@@ -222,6 +226,8 @@ def test_the_owners_library_moves_into_its_own_folder_once(settings):
     home = data / "users" / "owner"
     for name in ("marginote.db", "photos", "covers", "backups"):
         (home / name).rename(data / name)
+    for folder in (home / "pdfs" / "inbox", home / "pdfs"):      # 0.6 had no PDFs
+        folder.rmdir()
     home.rmdir()
     (data / "users").rmdir()
     files_before = sorted(p.relative_to(data).as_posix() for p in data.rglob("*") if p.is_file()

@@ -231,6 +231,19 @@ const KINDS = {
     ctx("    put(kindsBox, kinds.length > 1 ? filterRow([['', 'all'], ...kinds.map((k) => [k, `${KINDS[k].several} ${present[k]}`])], st.kind,",
         "    put(kindsBox, kinds.length > 1 ? filterRow([['', 'tout'], ...kinds.map((k) => [k, `${KINDS[k].several} ${present[k]}`])], st.kind,")
 
+    # PDFs: how a PDF was recognised, said the French way
+    ctx("const foundBy = { doi: 'the DOI', arxiv: 'the arXiv number', isbn: 'the ISBN' };",
+        "const foundBy = { doi: 'au DOI', arxiv: 'au numéro arXiv', isbn: 'à l’ISBN' };")
+    ctx("    const how = f.by ? `Found from ${foundBy[f.by]} printed on page ${(f.page ?? 0) + 1}` : null;",
+        "    const how = f.by ? `Trouvé grâce ${foundBy[f.by]} imprimé en page ${(f.page ?? 0) + 1}` : null;")
+    ctx("""    const showCount = () => { keptLine.textContent = joinDots([kept.length ? `${kept.length} kept on this page` : null, doc.entry_count ? `${doc.entry_count} in the PDF` : null]).join(''); };""",
+        """    const showCount = () => { keptLine.textContent = joinDots([kept.length ? `${kept.length} gardé${kept.length > 1 ? 's' : ''} sur cette page` : null, doc.entry_count ? `${doc.entry_count} dans le PDF` : null]).join(''); };""")
+    ctx("d.entry_count ? `${d.entry_count} kept` : null", "d.entry_count ? `${d.entry_count} gardé${d.entry_count > 1 ? 's' : ''}` : null")
+    ctx("""    const ok = await confirmDialog({ title: 'Delete this PDF?', text: doc.entry_count
+      ? `The ${plural(doc.entry_count, 'quote')} kept from it stay, with their page.` : 'Nothing was kept from it yet.',""",
+        """    const ok = await confirmDialog({ title: 'Supprimer ce PDF ?', text: doc.entry_count
+      ? `Ce que vous en avez gardé (${plural(doc.entry_count, 'quote')}) reste, avec sa page.` : 'Rien n’en a encore été gardé.',""")
+
     # ---------- plain texts: replaced wherever they appear as a whole string ----------
     L = {
         "Cannot reach your server. Is Tailscale on?": "Impossible de joindre votre serveur. Tailscale est-il activé ?",
@@ -380,7 +393,7 @@ const KINDS = {
         "+ New source": "+ Nouvelle source",
         "Take a photo": "Prendre une photo",
         "Choose a photo": "Choisir une photo",
-        "or drop a photo or a screenshot here": "ou déposez ici une photo ou une capture d’écran",
+        "or drop a photo, a screenshot or a PDF here": "ou déposez ici une photo, une capture d’écran ou un PDF",
         "Write a note": "Écrire une note",
         "Choose a screenshot": "Choisir une capture d’écran",
         "Choose a photo or a screenshot": "Choisir une photo ou une capture d’écran",
@@ -598,6 +611,52 @@ const KINDS = {
         "Authors": "Auteurs",
         "with your comments": "avec vos commentaires",
         "Bibliography at the end": "Bibliographie à la fin",
+        # PDFs
+        "Choose a PDF file": "Choisissez un fichier PDF",
+        "Sending ${file.name}…": "Envoi de ${file.name}…",
+        "Choose a PDF": "Choisir un PDF",
+        "Delete the PDF": "Supprimer le PDF",
+        "PDF deleted": "PDF supprimé",
+        "Reading the PDF… ${doc.read_pages} of ${plural(doc.pages, 'page')}": "Lecture du PDF… ${doc.read_pages} sur ${plural(doc.pages, 'page')}",
+        "You can leave this page: the reading goes on, and the PDF waits in the inbox.":
+            "Vous pouvez quitter cette page : la lecture continue, et le PDF attend dans « À trier ».",
+        "This PDF could not be read.": "Ce PDF n’a pas pu être lu.",
+        "Delete it": "Le supprimer",
+        "already in your library": "déjà dans votre bibliothèque",
+        "Yes, it is this one": "Oui, c’est bien ça",
+        "It is not…": "Ce n’est pas ça…",
+        "book recognised": "livre reconnu",
+        "article recognised": "article reconnu",
+        "${names.slice(0, 3).join(', ')} and ${names.length - 3} others": "${names.slice(0, 3).join(', ')} et ${names.length - 3} autres",
+        "${how}, then completed by ${src.found_by}.": "${how}, puis complété par ${src.found_by}.",
+        "That’s it": "C’est bien ça",
+        "Its authors join your people; those already there are not doubled.":
+            "Ses auteurs rejoignent vos personnes ; ceux qui y sont déjà ne sont pas doublés.",
+        "Recognised": "Reconnu",
+        "Which source?": "Quelle source ?",
+        "Is it this?": "Est-ce bien ça ?",
+        "Look again": "Chercher à nouveau",
+        "Its title seems to be ": "Son titre semble être ",
+        "“${f.title}”": "« ${f.title} »",
+        "or from your library": "ou dans votre bibliothèque",
+        "Delete this PDF…": "Supprimer ce PDF…",
+        "Keep this passage": "Garder ce passage",
+        "Keep this passage · ${plural(r.end - r.start + 1, 'word')}": "Garder ce passage · ${plural(r.end - r.start + 1, 'word')}",
+        "Kept": "Gardé",
+        "Add a comment": "Ajouter un commentaire",
+        "Open": "Ouvrir",
+        "page before": "page précédente",
+        "Open the PDF here": "Ouvrir le PDF ici",
+        "page after": "page suivante",
+        "page ${pdf.index + 1} of the PDF": "page ${pdf.index + 1} du PDF",
+        "See it in the PDF": "Voir dans le PDF",
+        "Change the selection in the PDF": "Modifier la sélection dans le PDF",
+        "PDFs to sort": "PDF à trier",
+        "being read… ${d.read_pages}/${d.pages}": "en lecture… ${d.read_pages}/${d.pages}",
+        "recognised": "reconnu",
+        "An article or a book as a PDF: recognised, kept, then read page by page":
+            "Un article ou un livre en PDF : reconnu, gardé, puis lu page par page",
+        "Its PDF": "Son PDF",
         # scientific articles
         "doi or arxiv": "doi ou arxiv",
         "10.1000/xyz123 or 2401.01234": "10.1000/xyz123 ou 2401.01234",

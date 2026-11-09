@@ -349,6 +349,7 @@ CREATE TABLE documents (
     sha256      TEXT NOT NULL,
     pages       INTEGER NOT NULL DEFAULT 0,
     status      TEXT NOT NULL DEFAULT 'reading',     -- 'reading', 'ready' or 'failed'
+    read_pages  INTEGER NOT NULL DEFAULT 0,          -- how far the reading has gone
     queued      INTEGER NOT NULL DEFAULT 1,          -- 1: in À trier
     found       TEXT,                                -- what was recognised in it (JSON)
     created_at  TEXT NOT NULL
@@ -358,7 +359,8 @@ CREATE INDEX documents_sha256 ON documents (sha256);
 ALTER TABLE photos ADD COLUMN document_id TEXT REFERENCES documents (id) ON DELETE CASCADE;
 ALTER TABLE photos ADD COLUMN page_index INTEGER;    -- 0 for a PDF's first page
 CREATE INDEX photos_document ON photos (document_id, page_index);
-CREATE VIRTUAL TABLE page_fts USING fts5 (text, tokenize = 'unicode61 remove_diacritics 2');   -- rowid: the photo's
+-- the text of every PDF page, to find in which one a passage sent from a reader is
+CREATE VIRTUAL TABLE page_fts USING fts5 (photo_id UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2');
 
 CREATE TABLE waiting (
     id          INTEGER PRIMARY KEY,

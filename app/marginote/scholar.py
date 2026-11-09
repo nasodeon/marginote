@@ -10,10 +10,13 @@ import re
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 
+from . import lookup, names
 from .lookup import HEADERS, LookupUnavailable, httpx
 
 log = logging.getLogger("marginote")
 ATOM = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+NOT_FOUND = {"doi": "No article found for this DOI", "arxiv": "No article found for this arXiv number",
+             "isbn": "No book found for this ISBN"}
 BOOK_TYPES = {"book", "monograph", "edited-book", "reference-book", "book-set"}
 
 
@@ -185,3 +188,27 @@ def lookup_arxiv(number: str, client_factory=None) -> dict | None:
         return parse_arxiv(r.text)
     except ET.ParseError:
         return None
+
+
+def identify(kind: str, value: str) -> dict | None:
+    """The source a DOI, an arXiv number or an ISBN names, in the shape of a new source; None if nobody knows
+    it. Raises LookupUnavailable when the services could not be reached."""
+    if kind == "doi":
+        return lookup_doi(value)
+    if kind == "arxiv":
+        found = lookup_arxiv(value)
+        if found and found.get("doi"):          # published since: the journal's details too
+            try:
+                found = {**found, **{k: v for k, v in (lookup_doi(found["doi"]) or {}).items() if v}, "arxiv": value}
+            except LookupUnavailable:
+                pass
+        return found
+    if kind == "isbn":
+        book = lookup.lookup_isbn(value)
+        if not book:
+            return None
+        return {"kind": "book", **{k: book.get(k) for k in ("title", "subtitle", "publisher", "year", "language")},
+                "isbn": value, "people": {"author": names.split_list(book.get("authors")),
+                                          "translator": names.split_list(book.get("translator"))},
+                "found_by": book.get("source")}
+    raise ValueError(f"Not an identifier: {kind}")

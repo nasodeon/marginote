@@ -277,9 +277,10 @@ def router(ctx: Context) -> APIRouter:
     @api.delete("/api/sources/{source_id}", tags=["sources"])
     def delete_source(source_id: int, conn: sqlite3.Connection = Depends(get_db),
             lib: Library = current):
-        """Deletes the source with all its quotes (their photos go with the hourly cleanup). Your notes on it
-        are kept."""
+        """Deletes the source with all its quotes (their photos go with the hourly cleanup) and its PDFs. Your
+        notes on it are kept."""
         row = load_source(conn, source_id)
+        lib.files.remove_documents(conn, "source_id = ?", (source_id,))
         conn.execute("DELETE FROM entries_fts WHERE rowid IN (SELECT id FROM entries WHERE source_id = ?)", (source_id,))
         notes = [r[0] for r in conn.execute("SELECT note_id FROM note_sources WHERE source_id = ?", (source_id,))]
         conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))

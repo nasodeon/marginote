@@ -143,30 +143,12 @@ def router(ctx: Context) -> APIRouter:
             out["note"] = "Online lookups are turned off"
             return out
         try:
-            if kind == "doi":
-                out["source"] = scholar.lookup_doi(value)
-            elif kind == "arxiv":
-                found = scholar.lookup_arxiv(value)
-                if found and found.get("doi"):          # published since: the journal's details too
-                    try:
-                        found = {**found, **{k: v for k, v in (scholar.lookup_doi(found["doi"]) or {}).items() if v},
-                                 "arxiv": value}
-                    except lookup.LookupUnavailable:
-                        pass
-                out["source"] = found
-            else:
-                book = lookup.lookup_isbn(value)
-                if book:
-                    out["source"] = {"kind": "book", **{k: book.get(k) for k in ("title", "subtitle", "publisher", "year", "language")},
-                                     "isbn": value, "people": {"author": names.split_list(book.get("authors")),
-                                                               "translator": names.split_list(book.get("translator"))},
-                                     "found_by": book.get("source")}
+            out["source"] = scholar.identify(kind, value)
         except lookup.LookupUnavailable:
             out["note"] = "The online services could not be reached from your server"
             return out
         if not out["source"]:
-            out["note"] = {"doi": "No article found for this DOI", "arxiv": "No article found for this arXiv number",
-                           "isbn": "No book found for this ISBN"}[kind]
+            out["note"] = scholar.NOT_FOUND[kind]
         else:
             src = out["source"]
             out["existing"] = (existing(conn, "doi", src.get("doi")) or existing(conn, "arxiv", src.get("arxiv"))
@@ -193,10 +175,10 @@ def router(ctx: Context) -> APIRouter:
 
     @api.get("/api/backup/download", tags=["status"])
     def backup_download(lib: Library = Depends(ctx.require_library)):
-        """Your whole library in one zip: a consistent copy of its database, its page photos and covers."""
+        """Your whole library in one zip: a consistent copy of its database, its page photos, covers and PDFs."""
         name = f"marginote-{datetime.now():%Y-%m-%d}.zip"
         return StreamingResponse(
-            backup.archive(lib.settings.db_path, lib.settings.data_dir, ("photos", "covers")),
+            backup.archive(lib.settings.db_path, lib.settings.data_dir, ("photos", "covers", "pdfs")),
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{name}"'},
         )
