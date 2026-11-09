@@ -119,6 +119,8 @@ def router(ctx: Context) -> APIRouter:
         db.reindex_entry(conn, entry_id)
         if body.photo_id:
             lib.files.file_photo(conn, body.photo_id, body.source_id, page)
+            if photo["document_id"]:
+                documents.set_reading(conn, photo["document_id"])      # the PDF being read
         conn.commit()
         return entry_dict(conn, entry_id)
 

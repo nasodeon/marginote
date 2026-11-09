@@ -365,11 +365,13 @@ CREATE VIRTUAL TABLE page_fts USING fts5 (photo_id UNINDEXED, text, tokenize = '
 CREATE TABLE waiting (
     id          INTEGER PRIMARY KEY,
     text        TEXT,
+    note        TEXT,                                -- a comment sent with it
     url         TEXT,
     title       TEXT,
     origin      TEXT,                                -- 'windows', 'iphone', 'android', 'web', 'app'
     source_id   INTEGER REFERENCES sources (id) ON DELETE SET NULL,   -- a guess, to confirm
-    reason      TEXT,                                -- why it waits: 'source', 'page'
+    guess       TEXT,                                -- where in a PDF it may be (JSON), to confirm
+    reason      TEXT,                                -- why it waits: 'source', 'place'
     created_at  TEXT NOT NULL
 );
 

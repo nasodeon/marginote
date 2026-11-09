@@ -32,8 +32,21 @@ class TooBig(ValueError):
 
 
 def page_text(words: list[ocr.Word]) -> str:
-    """A page's text in one piece, words cut at the end of a line glued back: what passages are looked for in."""
-    return ocr.join_words(words)
+    """A page's text as page_fts keeps it, to find the pages a passage may be on (see matching.py)."""
+    from .matching import index_text
+    return index_text(words)
+
+
+def set_reading(conn: sqlite3.Connection, doc_id: str | None) -> None:
+    """The PDF being read: where a passage sent from a reader is looked for first."""
+    conn.execute("INSERT INTO library_state (key, value) VALUES ('reading', ?) "
+                 "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (json.dumps({"document": doc_id, "since": db.now()}),))
+
+
+def reading(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT value FROM library_state WHERE key = 'reading'").fetchone()
+    doc_id = json.loads(row[0]).get("document") if row else None
+    return doc_id if doc_id and conn.execute("SELECT 1 FROM documents WHERE id = ?", (doc_id,)).fetchone() else None
 
 
 def save_upload(lib, conn: sqlite3.Connection, stream: BinaryIO, name: str | None,
@@ -183,7 +196,7 @@ def recognise(lib, conn: sqlite3.Connection, doc_id: str, name: str | None, look
         layer = pdfs.first_text(lib.files.pdfs / row["path"], FIRST_PAGES)   # PDFium's own reading: sideways stamps too
     except pdfs.NotAPdf:
         layer = []
-    texts = [(layer[i] if i < len(layer) else "") + "\n" + page_text(words.get(i, [])) for i in range(len(words))]
+    texts = [(layer[i] if i < len(layer) else "") + "\n" + ocr.join_words(words.get(i, [])) for i in range(len(words))]
     found: dict = {"by": None, "value": None, "page": None}
 
     def first(kinds: tuple[str, ...], upto: int) -> bool:

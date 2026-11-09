@@ -84,6 +84,9 @@ def router(ctx: Context) -> APIRouter:
             raise HTTPException(413, str(err)) from None
         except pdfs.NotAPdf:
             raise HTTPException(415, "This file is not a PDF the app can read") from None
+        if source_id is not None:
+            documents.set_reading(conn, doc_id)       # imported to be read now: passages sent are looked for in it first
+            conn.commit()
         if new:
             ctx.reader_queue.put(("document", lib, doc_id))
         elif source_id is not None:
@@ -126,8 +129,10 @@ def router(ctx: Context) -> APIRouter:
             if body.source_id is not None:
                 load_source(conn, body.source_id)
             lib.files.file_document(conn, doc_id, body.source_id)
-            if body.source_id is not None and "queued" not in changes:
-                changes["queued"] = False
+            if body.source_id is not None:
+                documents.set_reading(conn, doc_id)
+                if "queued" not in changes:
+                    changes["queued"] = False
         if changes.get("queued") is not None:
             conn.execute("UPDATE documents SET queued = ? WHERE id = ?", (int(changes["queued"]), doc_id))
         conn.commit()

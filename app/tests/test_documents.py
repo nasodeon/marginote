@@ -167,6 +167,9 @@ def test_a_scanned_page_is_read_like_a_photo_and_a_bad_file_is_refused(logged_in
     assert "Une revue" in page["text"] and "Marceau" in page["text"]        # read with Tesseract
     assert doc["page_list"][0]["page"] == "45"
     assert doc["found"]["by"] == "doi" and doc["found"]["note"] == "No article found for this DOI"
+    # a passage copied from a reader's own reading of the scan is found in Tesseract's
+    found = c.post("/api/passages/find", json={"text": FILLER[:120].replace("surlignent", "sur-\nlignent")}).json()
+    assert found["match"]["document_id"] == doc["id"] and found["match"]["score"] > 0.9 and found["sure"]
     assert c.post("/api/documents", files={"file": ("x.pdf", b"not a pdf at all", "application/pdf")}).status_code == 415
 
 
