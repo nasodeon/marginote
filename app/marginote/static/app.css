@@ -602,7 +602,7 @@ pre.code { margin: 0; padding: 10px 12px; background: var(--tint); font-family: 
 .found-card .t { font-size: 20px; line-height: 1.25; }
 .found-card .muted { color: var(--grey); font-size: 15px; overflow-wrap: anywhere; }
 .found-card .note-line { margin-top: 4px; }
-.kept { position: absolute; background: var(--mark-edge); pointer-events: none; }
+.kept-mark { position: absolute; background: var(--mark-edge); pointer-events: none; }
 .page-turn { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .page-turn .link-btn { min-height: 40px; font-size: 16px; }
 .kept-count { flex: 1; text-align: center; font-size: 14px; color: var(--grey); }
@@ -626,3 +626,24 @@ label.pick { cursor: pointer; }
 .key-made { display: flex; flex-direction: column; gap: 10px; padding: 12px 0; border-top: 1.2px solid var(--rule); border-bottom: 1.2px solid var(--rule); }
 .key-made pre.code { white-space: pre-wrap; word-break: break-all; }
 .steps li pre.code { margin: 6px 0; }
+
+/* Add: one place for anything */
+.add-zone { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed var(--grey); }
+.add-zone.over { border-style: solid; border-color: var(--ink); background: var(--tint); }
+.paste-box { min-height: 84px; border: 0; padding: 0; background: transparent; resize: vertical; }
+.add-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.add-actions .btn { min-height: 40px; }
+.add-actions .btn.primary { margin-left: auto; }
+.waiting-row svg:last-child { flex: none; color: var(--grey); }
+.inbox-row.waiting .quote-line { font-size: 16px; line-height: 1.35; }
+.inbox-row.waiting .thumb { display: flex; align-items: center; justify-content: center; height: 48px; }
+.inbox-row .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* a passage just kept */
+.kept-head { display: flex; align-items: baseline; gap: 10px; }
+.kept-head .sc { color: var(--grey); }
+.kept-head .muted { font-size: 14px; color: var(--grey); }
+.save-state { margin-left: auto; font-size: 14px; color: var(--grey); font-style: italic; }
+.details.kept .quote-env { margin: 0; }
+.details.kept .cite { margin: 0; }
+.colhead.plain { padding-left: 0; padding-right: 0; }

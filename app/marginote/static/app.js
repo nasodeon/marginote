@@ -127,7 +127,7 @@ const KINDS = {
 };
 // a scientific article (a DOI, an arXiv number or a journal) is quoted by page, like a book
 const isPaper = (s) => s?.kind === 'article' && Boolean(s.doi || s.arxiv || s.journal || s.pages);
-const PAPER = { ...KINDS.article, where: 'page' };
+const PAPER = { ...KINDS.article, where: 'page', photos: true };   // printed, it is photographed like a book
 const kindOf = (s) => (isPaper(s) ? PAPER : KINDS[s?.kind] || KINDS.book);
 const makers = (s) => [...(s.people?.author || []), ...(s.people?.speaker || []), ...(s.people?.editor || [])];
 // every author is kept; in a line, more than three are 'the first et al.'
@@ -1305,6 +1305,52 @@ async function viewEntryEdit({ args: [id] }) {
   return { el, bare: !isWide(), nav: 'quotes' };
 }
 
+// ----- a passage just kept: everything is saved already; what is added here is saved as it is typed -----
+
+async function viewKept({ args: [id], params }) {
+  const [e, sources, people, topics] = await Promise.all([api(`/api/entries/${id}`), store.sources(), store.people(), store.topics()]);
+  const source = e.source ? sources.find((s) => s.id === e.source.id) || await api(`/api/sources/${e.source.id}`) : null;
+  nav.label('Kept');
+  const next = params.get('next');
+  const fields = entryFields({ source, sources, people, topics, entry: e });
+  const state = h('span', { class: 'save-state', role: 'status' });
+  let saved = JSON.stringify(fields.values());
+  let saving = null;
+  const save = async () => {
+    const body = fields.values();
+    const now = JSON.stringify(body);
+    if (now === saved) return;
+    if (!body.source_id && !body.words_by) { state.textContent = 'Say who said it'; return; }
+    state.textContent = 'Saving…';
+    saving = api(`/api/entries/${id}`, { method: 'PATCH', body }).then(() => { saved = now; state.textContent = 'Saved'; store.changed(); })
+      .catch((err) => { state.textContent = err.message; });
+    await saving;
+  };
+  const later = debounce(save, 700);
+  const leave = async (target) => { await save(); if (saving) await saving; nav.replace(target); };
+  const pdf = e.photo_document;
+  const holder = h('div', { class: 'details kept' },
+    h('div', { class: 'kept-head' }, h('span', { class: 'sc', text: 'kept' }), e.page ? h('span', { class: 'muted', text: placeText(e.page) }) : null,
+      pdf ? h('span', { class: 'muted', text: 'from its PDF' }) : null, state),
+    h('blockquote', { class: 'quote-env', lang: source?.language || null, text: e.text }),
+    h('p', { class: 'cite muted', text: citation(e, source) }),
+    h('div', { class: 'colhead plain' }, h('span', { style: { flex: 1 }, text: 'connect, if you like' })),
+    fields.els,
+    h('div', { class: 'row-btns' },
+      h('a', { class: 'btn small', href: `#/entry/${id}/edit` }, 'Change the text'),
+      h('a', { class: 'btn small', href: `#/note/new?entry=${id}` }, 'Write a note on it')),
+    h('p', { class: 'note-line', text: 'Everything is saved already. What you add here is saved too, as you type.' }));
+  for (const ev of ['change', 'focusout', 'click', 'keyup']) holder.addEventListener(ev, later);
+  const done = source ? `source/${source.id}` : `entry/${id}`;
+  const el = h('div', {},
+    bar(h('button', { class: 'link-btn', type: 'button', onclick: () => leave(next || done) }, icon('back', 20), next ? 'Page' : 'Back'), 'Kept',
+      h('button', { class: 'link-btn strong', type: 'button', onclick: () => leave(done) }, 'Done')),
+    holder,
+    h('div', { class: 'save-bar' },
+      h('button', { class: 'btn primary big', type: 'button', onclick: () => leave(next || 'capture') }, next ? 'Next passage' : 'Add another')));
+  return { el, bare: !isWide(), nav: 'quotes', cleanup: () => { save(); } };
+}
+
 async function viewEntryPhoto({ args: [id] }) {
   const e = await api(`/api/entries/${id}`);
   if (!e.photo_id) { nav.replace(`entry/${id}`); return null; }
@@ -1519,7 +1565,7 @@ function makeSelector(photo, { start = null, end = null, onChange = () => {}, st
       if (!span.length) continue;
       const top = Math.min(...span.map((w) => w.y)), bottom = Math.max(...span.map((w) => w.y + w.h));
       const left = Math.min(...lines.filter((l) => l.words.some((w) => w.i >= a && w.i <= b)).map((l) => l.left));
-      keptLayer.append(h('div', { class: 'kept', style: box(Math.max(0, left - photo.width * 0.018), top, photo.width * 0.006, bottom - top) }));
+      keptLayer.append(h('div', { class: 'kept-mark', style: box(Math.max(0, left - photo.width * 0.018), top, photo.width * 0.006, bottom - top) }));
     }
   }
 
@@ -1671,6 +1717,7 @@ function finishShared() {
   try {
     const kept = JSON.parse(sessionStorage.getItem('marginote.shared') || 'null');
     if (kept?.raw) sessionStorage.setItem('marginote.sharedSaved', kept.raw);
+    if (kept?.waiting) api(`/api/waiting/${kept.waiting}`, { method: 'DELETE' }).catch(() => null);   // it waited in the inbox
     sessionStorage.removeItem('marginote.shared');
   } catch { /* nothing kept */ }
 }
@@ -1718,48 +1765,206 @@ async function viewCapture({ params }) {
     if (sh.url) { keepShared(sh); stepLink(sh.url, sh.title || '', sh.text, Boolean(sh.raw)); return; }
     shared = sh;
     keepShared();
-    stepShared(sh);
+    lookInPdfs(sh);
+  }
+
+  // a passage alone: looked for in your PDFs first; found, it is kept with its page in one tap
+  async function lookInPdfs(sh) {
+    cleanup();
+    root.classList.remove('fill-screen');
+    put(root, bar(leave(), 'Shared'), h('div', { class: 'capture-start' },
+      h('div', { class: 'status-line', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Looking in your PDFs…')));
+    let found = null;
+    try { found = await api('/api/passages/find', { method: 'POST', body: { text: sh.text } }); } catch { found = null; }
+    if (!found?.match) { stepShared(sh); return; }
+    stepFound(sh, found);
+  }
+
+  function stepFound(sh, found) {
+    const m = found.match;
+    const keep = async (ev) => {
+      ev.currentTarget.disabled = true;
+      try {
+        const e = await api('/api/entries', { method: 'POST', body: { source_id: m.source_id, photo_id: m.photo_id, word_start: m.word_start,
+          word_end: m.word_end, page: m.page, text: m.text } });
+        store.changed();
+        finishShared();
+        nav.replace(`entry/${e.id}/kept`);
+      } catch (err) { ev.currentTarget.disabled = false; toast(err.message); }
+    };
+    put(root,
+      bar(sharedFromStart ? backTo(stepStart) : leave(), 'Found'),
+      h('div', { class: 'capture-start' },
+        h('h1', { class: 'ask', text: found.sure ? 'Found in your PDFs' : 'Probably here' }),
+        h('div', { class: 'found-card' },
+          h('span', { class: 'sc', text: m.source_id ? `p. ${m.page}` : `p. ${m.page} · ${m.document_name}` }),
+          h('b', { class: 't', text: m.source_title || m.document_name }),
+          h('blockquote', { class: 'shared-text', text: shorten(m.text, 600) }),
+          found.sure ? h('span', { class: 'note-line', text: 'The text kept is the PDF’s own, with its page.' })
+            : h('span', { class: 'note-line', text: `${Math.round(m.score * 100)}% of the passage found here.` })),
+        m.source_id
+          ? h('button', { class: 'btn primary big', type: 'button', onclick: keep }, 'Keep it here')
+          : [h('p', { class: 'note-line', text: 'This PDF has no source yet.' }),
+            h('a', { class: 'btn primary big', href: `#/document/${m.document_id}` }, 'Give the PDF its source')],
+        h('a', { class: 'btn big', href: `#/document/${m.document_id}?page=${m.page_index}` }, 'See it on its page'),
+        h('button', { class: 'btn big', type: 'button', onclick: () => stepShared(sh) }, 'It is from elsewhere…')));
+  }
+
+  // a DOI, an arXiv number or an ISBN: the source it names
+  async function stepRecognised(r) {
+    cleanup();
+    root.classList.remove('fill-screen');
+    const ex = r.existing;
+    const src = r.source;
+    const names = src?.people?.author || [];
+    const create = async (ev) => {
+      ev.currentTarget.disabled = true;
+      try {
+        const body = { ...src, fetch_cover: src.kind === 'book' };
+        delete body.found_by;
+        const made = await api('/api/sources', { method: 'POST', body });
+        store.changed();
+        sources.unshift(made);
+        startedHere = true;
+        stepSource(made);
+      } catch (err) { ev.currentTarget.disabled = false; toast(err.message); }
+    };
+    const fromLibrary = ex ? sources.find((x) => x.id === ex.id) || await api(`/api/sources/${ex.id}`) : null;
+    const typeIt = `#/source/new?kind=${r.kind === 'isbn' ? 'book' : 'article'}&then=capture`;
+    put(root,
+      bar(backTo(stepStart), 'Recognised'),
+      h('div', { class: 'capture-start' },
+        h('h1', { class: 'ask', text: ex ? 'Already in your library' : src ? 'Is it this?' : 'Not found' }),
+        fromLibrary ? [sourceChoice(fromLibrary), h('button', { class: 'btn primary big', type: 'button', onclick: () => { startedHere = true; stepSource(fromLibrary); } }, 'Add from it')]
+          : src ? [h('div', { class: 'found-card' },
+            h('span', { class: 'sc', text: src.kind === 'book' ? 'book recognised' : 'article recognised' }),
+            h('b', { class: 't', text: src.title }),
+            names.length ? h('span', { text: names.length > 3 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} others` : names.join(', ') }) : null,
+            inJournal(src) || src.publisher ? h('i', { text: [inJournal(src) || src.publisher, src.year].filter(Boolean).join(', ') }) : null,
+            src.doi ? h('span', { class: 'muted', text: `doi:${src.doi}` }) : null,
+            src.found_by ? h('span', { class: 'note-line', text: `Found by ${src.found_by}.` }) : null),
+          h('button', { class: 'btn primary big', type: 'button', onclick: create }, 'That’s it'),
+          h('a', { class: 'btn big', href: typeIt }, 'It is not…')]
+            : [h('p', { class: 'note-line', text: `${r.note || 'Nothing found'}.` }), h('a', { class: 'btn primary big', href: typeIt }, 'Type the details')]));
+  }
+
+  // whatever was pasted: an identifier, a link, or a passage
+  async function recognise(text) {
+    const raw = text.trim();
+    if (!raw) return;
+    let r = null;
+    try { r = await api('/api/recognize', { method: 'POST', body: { text: raw } }); } catch (err) { toast(err.message); }
+    if (r && ['doi', 'arxiv', 'isbn'].includes(r.kind)) stepRecognised(r);
+    else takeShared(parseShared(raw), true);
+  }
+
+  // files chosen or dropped: one PDF opens; one photo is read for a source you pick; several wait in the inbox
+  async function takeFiles(files) {
+    const list = [...files].filter((f) => f.type.startsWith('image/') || f.type === 'application/pdf' || /\.(pdf|heic|heif)$/i.test(f.name));
+    if (!list.length) { toast('Choose photos, screenshots or PDFs'); return; }
+    const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+    if (list.length === 1) {
+      if (isPdf(list[0])) { sendPdf(list[0], null, { replace: true }); return; }
+      stepPick((s) => { source = s; startedHere = true; send(list[0]); }, stepStart);
+      return;
+    }
+    toast(`Sending ${plural(list.length, 'file')}…`);
+    let sent = 0;
+    for (const f of list) {
+      try {
+        const form = new FormData();
+        if (isPdf(f)) { form.append('file', f); await api('/api/documents', { method: 'POST', form }); }
+        else { form.append('file', await shrinkPhoto(f)); await api('/api/photos?later=true', { method: 'POST', form }); }
+        sent += 1;
+      } catch (err) { toast(`${f.name}: ${err.message}`); }
+    }
+    store.changed();
+    if (sent) { toast(`${plural(sent, 'file')} in the inbox`); nav.replace('inbox'); }
   }
 
   function stepStart() {
     cleanup();
     startedHere = true;
     shared = null;
-    const recent = sources.slice(0, 4);
+    root.classList.remove('fill-screen');
+    const box = h('textarea', { class: 'textarea paste-box', rows: 3, id: 'a-paste', placeholder: 'Paste here: a passage, a link, a DOI, an ISBN…',
+      'aria-label': 'Paste here' });
+    const go2 = h('button', { class: 'btn primary', type: 'button', hidden: true, onclick: () => recognise(box.value) }, 'Next');
+    box.addEventListener('input', () => { go2.hidden = !box.value.trim(); });
+    box.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); recognise(box.value); } });
     const paste = async () => {
       let text = '';
       try { text = await navigator.clipboard.readText(); } catch { /* not allowed: paste it by hand */ }
-      if (text.trim()) takeShared(parseShared(text), true); else stepPaste();
+      if (text.trim()) recognise(text); else { box.focus(); toast(coarse() ? 'Touch the box, then Paste' : 'Paste in the box (Ctrl+V)'); }
     };
+    const files = h('input', { type: 'file', multiple: true, accept: 'image/*,application/pdf,.pdf', 'aria-label': 'Choose files',
+      onchange: (ev) => { const f = [...ev.target.files]; ev.target.value = ''; takeFiles(f); } });
+    const camera = h('input', { type: 'file', accept: 'image/*', capture: 'environment', 'aria-label': 'Take a photo',
+      onchange: (ev) => { const f = [...ev.target.files]; ev.target.value = ''; takeFiles(f); } });
+    const zone = h('div', { class: 'add-zone' }, box,
+      h('div', { class: 'add-actions' },
+        coarse() ? h('label', { class: 'btn file-btn' }, icon('camera', 18), 'Photo', camera) : null,
+        h('label', { class: 'btn file-btn' }, icon('image', 18), 'File', files),
+        h('button', { class: 'btn', type: 'button', onclick: paste }, icon('paste', 18), 'Paste'),
+        go2),
+      h('p', { class: 'note-line', text: coarse() ? 'File: photos, screenshots, PDFs. Several at once wait in the inbox.'
+        : 'or drop a photo, a screenshot or a PDF here. Several at once wait in the inbox.' }));
+    for (const t of ['dragenter', 'dragover']) zone.addEventListener(t, (ev) => { ev.preventDefault(); zone.classList.add('over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+    zone.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      zone.classList.remove('over');
+      if (ev.dataTransfer.files.length) takeFiles(ev.dataTransfer.files);
+      else { const t = ev.dataTransfer.getData('text'); if (t) recognise(t); }
+    });
+    const waitingRow = h('div');
+    const readingBox = h('div');
     const newRow = (ic, title, sub, onclick) => h('button', { type: 'button', class: 'pick', onclick },
       h('span', { class: 'slot small icon-slot' }, icon(ic, 26)), h('span', { class: 'main' }, h('span', { class: 't', text: title }), h('span', { class: 'a', text: sub })));
     put(root,
-      bar(leave(), 'Capture'),
+      bar(leave(), 'Add'),
       h('div', { class: 'capture-start' },
-        h('h1', { class: 'ask', text: 'What are you reading or watching?' }),
+        h('h1', { class: 'ask', text: 'What do you have in front of you?' }),
         aboutPreset?.length ? h('p', { class: 'note-line' }, `About ${aboutPreset[0].name}.`) : null,
         topicPreset?.length ? h('p', { class: 'note-line' }, `On ${topicPreset[0]}.`) : null,
-        h('button', { class: 'btn', type: 'button', onclick: paste, style: { alignSelf: 'flex-start' } }, icon('paste', 18), 'Paste what you copied')),
-      recent.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'continue' })),
-        recent.map((s) => h('button', { type: 'button', class: 'pick', onclick: () => { startedHere = true; stepSource(s); } }, thumb(s),
-          h('span', { class: 'main' }, h('span', { class: 't', text: s.title }), h('span', { class: 'a' }, sourceLine(s))))),
-        sources.length > recent.length ? h('button', { type: 'button', class: 'more-btn', onclick: () => stepPick((s) => stepSource(s)) }, 'Something else from the library ›') : null] : null,
+        zone),
+      waitingRow,
+      readingBox,
+      h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'write' })),
+      newRow('note', 'A note', 'Your own thoughts, on whatever you like', () => go(`note/new${carry ? '?' + carry.replace('about=', 'person=') : ''}`)),
+      newRow('said', 'Words someone said', 'With no source to point to: a class, the radio…', () => stepSaid('')),
       h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'something new' })),
-      newRow('book', 'Book or ebook', 'Photo of a page or a screenshot; the book from its ISBN or back cover',
+      newRow('book', 'Book or ebook', 'From its ISBN or a photo of its back cover; then photos of its pages',
         () => go(`source/new?kind=book&then=capture${carry ? '&' + carry : ''}`)),
-      h('label', { class: 'pick file-btn' }, h('span', { class: 'slot small icon-slot' }, icon('pdf', 26)),
-        h('span', { class: 'main' }, h('span', { class: 't', text: 'PDF' }),
-          h('span', { class: 'a', text: 'An article or a book as a PDF: recognised, kept, then read page by page' })), pdfInput(null)),
-      newRow('link', 'Link', 'Article, video or podcast: paste the link, or share it from the app', () => stepLink('')),
       newRow('class', 'Class', 'A course you take: notes for each session, and quotes',
         () => go(`source/new?kind=class&then=capture${carry ? '&' + carry : ''}`)),
       newRow('pen', 'Something else', 'A talk, a film: type its title and who gave it',
         () => go(`source/new?kind=talk&then=capture${carry ? '&' + carry : ''}`)),
-      newRow('said', 'Words someone said', 'Heard or read, with no source to point to', () => stepSaid('')),
-      newRow('note', 'Note', 'Your own thoughts on a person, a topic or a source', () => go(`note/new${carry ? '?' + carry.replace('about=', 'person=') : ''}`)),
-      h('div', { class: 'list-end' }),
-      h('div', { class: 'pad' }, h('button', { class: 'btn', type: 'button', style: { alignSelf: 'flex-start' }, onclick: () => stepLater(null) },
-        icon('inbox', 18), 'Photos to sort later')));
+      h('div', { class: 'list-end' }));
+    // what waits, and what you are reading: filled in as they arrive
+    Promise.all([api('/api/photos'), api('/api/documents?queued=true'), api('/api/waiting'), api('/api/reading')]).then(([ph, docs, waits, reading]) => {
+      if (!root.contains(waitingRow)) return;
+      const n = ph.length + docs.length + waits.length;
+      if (n) put(waitingRow, h('a', { class: 'pick waiting-row', href: '#/inbox' },
+        h('span', { class: 'slot small icon-slot' }, icon('inbox', 26)),
+        h('span', { class: 'main' }, h('span', { class: 't', text: `Inbox · ${n}` }),
+          h('span', { class: 'a', text: joinDots([docs.length ? plural(docs.length, 'PDF') : null, ph.length ? plural(ph.length, 'photo') : null,
+            waits.length ? plural(waits.length, 'passage') : null]).join('') })), icon('right', 18)));
+      const items = reading.length ? reading : sources.slice(0, 4).map((x) => ({ source: x, last_page: null, document: null }));
+      if (!items.length) return;
+      put(readingBox, h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'continue' })),
+        items.map((it) => {
+          const full = sources.find((x) => x.id === it.source.id) || it.source;
+          const d = it.document;
+          const where = d ? (it.last_page ? `read up to p. ${it.last_page}` : plural(d.pages, 'page')) : it.last_page ? `last time p. ${it.last_page}` : null;
+          const open = d ? () => go(`document/${d.id}${d.page_index != null ? `?page=${d.page_index}` : ''}`) : () => { startedHere = true; stepSource(full); };
+          return h('button', { type: 'button', class: 'pick', onclick: open }, thumb(full),
+            h('span', { class: 'main' }, h('span', { class: 't', text: full.title }),
+              h('span', { class: 'a' }, joinDots([d ? h('span', { class: 'sc', text: 'pdf' }) : null, full.people ? sourceLine(full) : null, where]))));
+        }),
+        sources.length > items.length ? h('button', { type: 'button', class: 'more-btn', onclick: () => stepPick((x) => { startedHere = true; stepSource(x); }) },
+          'Something else from the library ›') : null);
+    }).catch(() => null);
   }
 
   function stepPick(then, back) {
@@ -1973,22 +2178,37 @@ async function viewCapture({ params }) {
     } catch (err) { if (err.status !== 401) { root.dataset.error = err.message; stepSource(source); } }
   }
 
+  // keep the passage chosen on the photo at once, with its page; the next screen adds the rest, if wanted
+  async function keepFromPhoto(btn) {
+    btn.disabled = true;
+    const body = { source_id: source.id, photo_id: photo.id, word_start: range.start, word_end: range.end };
+    if (aboutPreset?.length) body.about = [...new Set([...source.people.about.map((p) => p.id), ...aboutPreset.map((p) => p.id)])];
+    if (topicPreset?.length) body.topics = [...new Set([...source.topics.map((t) => t.name), ...topicPreset])];
+    try {
+      const e = await api('/api/entries', { method: 'POST', body });
+      prefs.set('captureSource', source.id);
+      store.changed();
+      capture.last = { photo, sourceId: source.id };
+      const again = fromInbox ? `capture?photo=${photo.id}` : 'capture?again=1';
+      nav.replace(`entry/${e.id}/kept?next=${encodeURIComponent(again)}`);
+    } catch (err) { btn.disabled = false; toast(err.message); }
+  }
+
   function stepSelect() {
     cleanup();
     const preview = h('p', { class: 'sel-preview empty' });
-    const next = h('button', { class: 'btn primary big', type: 'button', disabled: true, onclick: async () => {
-      try {
-        const sel = await api(`/api/photos/${photo.id}/select`, { method: 'POST', body: { start: range.start, end: range.end } });
-        stepDetails(sel.text);
-      } catch (err) { toast(err.message); }
-    } }, 'Next');
+    const next = h('button', { class: 'btn primary big', type: 'button', disabled: true, onclick: () => keepFromPhoto(next) }, 'Keep this passage');
     selector = makeSelector(photo, { start: range?.start, end: range?.end, onChange: (r) => {
       range = r.phase === 'none' ? null : { start: r.start, end: r.end };
       preview.textContent = r.text || 'Tap the first word, then the last.';
       preview.classList.toggle('empty', !r.text);
       next.disabled = !range;
-      next.textContent = r.phase === 'none' ? 'Next' : `Next · ${plural(r.end - r.start + 1, 'word')}`;
+      next.textContent = r.phase === 'none' ? 'Keep this passage' : `Keep this passage · ${plural(r.end - r.start + 1, 'word')}`;
     } });
+    const shown = selector;   // passages already kept from this page: a line in the margin
+    api(`/api/sources/${source.id}/entries`).then((list) => {
+      if (selector === shown) shown.setKept(list.filter((e) => e.photo_id === photo.id && e.word_start != null).map((e) => [e.word_start, e.word_end]));
+    }).catch(() => null);
     put(root,
       bar(fromInbox ? cancelButton('inbox', 'Inbox') : backTo(() => stepSource(source), 'Retake'), source.title,
         h('button', { class: 'link-btn', type: 'button', onclick: () => stepDetails(null, true) }, 'Type')),
@@ -2193,6 +2413,12 @@ async function viewCapture({ params }) {
     source = sources.find((s) => s.id === photo.source_id);
     if (source) stepSelect();
     else stepPick(async (s) => { source = s; await api(`/api/photos/${photo.id}`, { method: 'PATCH', body: { source_id: s.id } }).catch(() => null); stepSelect(); });
+  } else if (params.get('waiting')) {
+    const w = (await api('/api/waiting')).find((x) => String(x.id) === params.get('waiting'));
+    if (!w) { toast('Already sorted'); nav.replace('inbox'); return null; }
+    const sh = { ...parseShared([w.text, w.url].filter(Boolean).join('\n')), title: w.title || '', waiting: w.id };
+    if (w.url) sh.url = w.url;
+    takeShared(sh);
   } else if (params.get('said')) {
     const who = people.find((p) => String(p.id) === params.get('said'));
     stepSaid('', who || null);
@@ -2220,8 +2446,11 @@ async function viewCapture({ params }) {
   return { el: root, bare: true, cleanup };
 }
 
+const ORIGINS = { windows: 'sent from Windows', iphone: 'sent from the iPhone', android: 'sent from Android', web: 'sent from a web page', app: 'kept here' };
+
+// what waits to become quotes: photos, PDFs and passages, by source
 async function viewInbox() {
-  const [photos, docs] = await Promise.all([api('/api/photos'), api('/api/documents?queued=true')]);
+  const [photos, docs, waits] = await Promise.all([api('/api/photos'), api('/api/documents?queued=true'), api('/api/waiting')]);
   nav.label('Inbox');
   const done = async (p) => {
     if (p.entry_count) {
@@ -2235,40 +2464,89 @@ async function viewInbox() {
     await api(`/api/photos/${p.id}`, { method: 'DELETE' }).catch((err) => toast(err.message));
     render();
   };
+  const drop = async (w) => {
+    const ok = await confirmDialog({ title: 'Remove this passage?', text: 'It was not kept anywhere: it is deleted.',
+      choices: [{ label: 'Remove it', value: true, danger: true }] });
+    if (!ok) return;
+    await api(`/api/waiting/${w.id}`, { method: 'DELETE' }).catch((err) => toast(err.message));
+    render();
+  };
+  const keep = async (w, btn) => {
+    btn.disabled = true;
+    try {
+      const e = await api(`/api/waiting/${w.id}/keep`, { method: 'POST', body: {} });
+      store.changed();
+      toast('Kept', { label: 'Add a comment', run: () => go(`entry/${e.id}/kept`) });
+      render();
+    } catch (err) { btn.disabled = false; toast(err.message); }
+  };
   if (photos.some((p) => p.status === 'reading') || docs.some((d) => d.status === 'reading')) {   // check again until every page is read
     const mark = location.hash;
     setTimeout(() => { if (location.hash === mark) render(); }, 3000);
   }
+  // by source; what has none yet comes last
+  const groups = new Map();
+  const add = (sid, title, row) => {
+    const key = sid || 0;
+    if (!groups.has(key)) groups.set(key, { sid, title, rows: [] });
+    groups.get(key).rows.push(row);
+  };
+  for (const d of docs) {
+    add(d.source?.id, d.source?.title, h('a', { class: 'inbox-row doc', href: `#/document/${d.id}` },
+      h('span', { class: 'thumb icon-slot' }, icon('pdf', 30)),
+      h('div', { class: 'main' },
+        h('span', { class: 't', text: d.found?.source?.title || d.found?.title || d.name }),
+        h('span', { class: 'a' }, joinDots([
+          h('span', { class: 'sc', text: 'pdf' }),
+          d.name,
+          d.status === 'reading' ? h('i', { text: `being read… ${d.read_pages}/${d.pages}` }) : plural(d.pages, 'page'),
+          d.status === 'failed' ? h('i', { class: 'bad', text: 'could not be read' }) : null,
+          d.existing ? h('i', { text: 'already in your library' }) : d.found?.source ? h('i', { text: 'recognised' }) : null,
+        ])))));
+  }
+  for (const p of photos) {
+    add(p.source_id, p.source_title, h('div', { class: 'inbox-row' },
+      h('img', { class: 'thumb', src: p.thumb_url, alt: '', loading: 'lazy' }),
+      h('div', { class: 'main' },
+        h('span', { class: 't', text: p.detected_page ? `p. ${p.detected_page}` : 'Page photo' }),
+        h('span', { class: 'a' }, joinDots([
+          p.status === 'reading' ? h('i', { text: 'being read…' }) : null,
+          p.status === 'failed' ? h('i', { class: 'bad', text: 'could not be read' }) : null,
+          p.entry_count ? plural(p.entry_count, 'quote') + ' saved' : null,
+          fullDate(p.created_at),
+        ])),
+        h('div', { class: 'actions' },
+          p.status === 'ready' ? h('a', { class: 'btn primary small', href: `#/capture?photo=${p.id}` }, 'Sort') : null,
+          h('button', { class: 'btn small', type: 'button', onclick: () => done(p) }, p.entry_count ? 'Done' : 'Remove…')))));
+  }
+  for (const w of waits) {
+    const g = w.guess;
+    const keepBtn = g?.source_id ? h('button', { class: 'btn primary small', type: 'button', onclick: (ev) => keep(w, ev.currentTarget) }, 'Keep') : null;
+    add(w.source_id || g?.source_id, g?.source_title, h('div', { class: 'inbox-row waiting' },
+      h('span', { class: 'thumb icon-slot' }, icon(w.text ? 'said' : 'link', 26)),
+      h('div', { class: 'main' },
+        w.text ? h('span', { class: 'quote-line', text: `« ${shorten(w.text, 220)} »` }) : h('span', { class: 't', text: w.title || w.url }),
+        w.note ? h('span', { class: 'a' }, h('i', { text: shorten(w.note, 120) })) : null,
+        h('span', { class: 'a' }, joinDots([
+          g?.source_id ? h('i', { text: `maybe p. ${g.page}` }) : g ? h('i', { text: `in ${g.document_name}, p. ${g.page}` }) : null,
+          ORIGINS[w.origin] || null,
+          fullDate(w.created_at),
+        ])),
+        h('div', { class: 'actions' },
+          keepBtn,
+          g && !g.source_id ? h('a', { class: 'btn primary small', href: `#/document/${g.document_id}` }, 'Give the PDF its source') : null,
+          h('a', { class: `btn small${keepBtn ? '' : ' primary'}`, href: `#/capture?waiting=${w.id}` }, keepBtn ? 'Elsewhere…' : 'Where from?'),
+          h('button', { class: 'btn small', type: 'button', onclick: () => drop(w) }, 'Remove…')))));
+  }
+  const ordered = [...groups.values()].sort((x, y) => (x.sid ? 0 : 1) - (y.sid ? 0 : 1));
+  const total = photos.length + docs.length + waits.length;
   const el = h('div', {},
-    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Inbox', h('span', { class: 'count', text: photos.length + docs.length })))),
-    docs.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'PDFs to sort' })),
-      docs.map((d) => h('a', { class: 'inbox-row doc', href: `#/document/${d.id}` },
-        h('span', { class: 'thumb icon-slot' }, icon('pdf', 30)),
-        h('div', { class: 'main' },
-          h('span', { class: 't', text: d.found?.source?.title || d.found?.title || d.name }),
-          h('span', { class: 'a' }, joinDots([
-            d.name,
-            d.status === 'reading' ? h('i', { text: `being read… ${d.read_pages}/${d.pages}` }) : plural(d.pages, 'page'),
-            d.status === 'failed' ? h('i', { class: 'bad', text: 'could not be read' }) : null,
-            d.existing ? h('i', { text: 'already in your library' }) : d.found?.source ? h('i', { text: 'recognised' }) : null,
-          ])))))] : null,
-    photos.length ? [h('div', { class: 'colhead' }, h('span', { style: { flex: 1 }, text: 'pages to sort' })),
-      photos.map((p) => h('div', { class: 'inbox-row' },
-        h('img', { class: 'thumb', src: p.thumb_url, alt: '', loading: 'lazy' }),
-        h('div', { class: 'main' },
-          h('span', { class: 't', text: p.source_title || 'No source yet' }),
-          h('span', { class: 'a' }, joinDots([
-            p.detected_page ? `p. ${p.detected_page}` : null,
-            p.status === 'reading' ? h('i', { text: 'being read…' }) : null,
-            p.status === 'failed' ? h('i', { class: 'bad', text: 'could not be read' }) : null,
-            p.entry_count ? plural(p.entry_count, 'quote') + ' saved' : null,
-            fullDate(p.created_at),
-          ])),
-          h('div', { class: 'actions' },
-            p.status === 'ready' ? h('a', { class: 'btn primary small', href: `#/capture?photo=${p.id}` }, 'Sort') : null,
-            h('button', { class: 'btn small', type: 'button', onclick: () => done(p) }, p.entry_count ? 'Done' : 'Remove…'))))),
+    h('header', { class: 'top' }, h('div', { class: 'top-row' }, h('h1', {}, 'Inbox', h('span', { class: 'count', text: total })))),
+    total ? [h('p', { class: 'pad note-line', text: 'What waits to become quotes, by source.' }),
+      ordered.map((g) => [h('div', { class: 'colhead' }, g.sid ? h('a', { class: 'ink', href: `#/source/${g.sid}`, style: { flex: 1 }, text: g.title || 'Source' })
+        : h('span', { style: { flex: 1 }, text: 'no source yet' })), g.rows]),
       h('div', { class: 'list-end' })]
-      : docs.length ? null : h('div', { class: 'empty' }, 'Nothing to sort.', h('a', { class: 'btn', href: '#/capture' }, 'Capture')));
+      : h('div', { class: 'empty' }, 'Nothing to sort.', h('a', { class: 'btn', href: '#/capture' }, 'Add')));
   return { el, nav: 'inbox' };
 }
 
@@ -2441,7 +2719,7 @@ async function viewDocument({ args: [id], params }) {
         selector.setKept(kept);
         selector.clear();
         showCount();
-        toast('Kept', { label: 'Add a comment', run: () => go(`entry/${e.id}/edit`) });
+        toast('Kept', { label: 'Add a comment', run: () => go(`entry/${e.id}/kept?next=${encodeURIComponent(`document/${id}?page=${index}`)}`) });
       } catch (err) { keep.disabled = false; toast(err.message); }
     });
     selector = makeSelector(photo, { kept, onChange: (r) => {
@@ -3470,6 +3748,7 @@ const ROUTES = [
   [/^entry\/(\d+)$/, viewEntry],
   [/^entry\/(\d+)\/edit$/, viewEntryEdit],
   [/^entry\/(\d+)\/photo$/, viewEntryPhoto],
+  [/^entry\/(\d+)\/kept$/, viewKept],
   [/^notes$/, viewNotes, true],
   [/^note\/new$/, viewNoteForm],
   [/^note\/(\d+)$/, viewNote],

@@ -118,6 +118,32 @@ def router(ctx: Context) -> APIRouter:
         (answer: kept, and where). Otherwise it waits in À trier (answer: waiting), with where it may be."""
         return receive(conn, body)
 
+    @api.get("/api/reading")
+    def reading_now(conn: sqlite3.Connection = Depends(get_db)):
+        """What you are reading: the sources you added to last (the PDF being read first), with where you
+        were (the page of the last quote) and their PDF if they have one."""
+        current = documents.reading(conn)
+        first = conn.execute("SELECT source_id FROM documents WHERE id = ?", (current,)).fetchone() if current else None
+        rows = conn.execute(
+            "SELECT s.id, s.kind, s.title, MAX(x.at) AS at FROM sources s JOIN ("
+            "  SELECT source_id, created_at AS at FROM entries WHERE source_id IS NOT NULL"
+            "  UNION ALL SELECT source_id, created_at FROM documents WHERE source_id IS NOT NULL"
+            "  UNION ALL SELECT ns.source_id, n.updated_at FROM note_sources ns JOIN notes n ON n.id = ns.note_id"
+            ") x ON x.source_id = s.id GROUP BY s.id ORDER BY (s.id = ?) DESC, at DESC LIMIT 5",
+            (first["source_id"] if first and first["source_id"] else -1,)).fetchall()
+        out = []
+        for r in rows:
+            last = conn.execute("SELECT e.page, p.document_id, p.page_index FROM entries e LEFT JOIN photos p ON p.id = e.photo_id "
+                                "WHERE e.source_id = ? ORDER BY e.created_at DESC, e.id DESC LIMIT 1", (r["id"],)).fetchone()
+            doc = conn.execute("SELECT id, name, pages FROM documents WHERE source_id = ? AND status = 'ready' "
+                               "ORDER BY (id = ?) DESC, created_at DESC LIMIT 1", (r["id"], current or "")).fetchone()
+            out.append({"source": {"id": r["id"], "kind": r["kind"], "title": r["title"]}, "at": r["at"],
+                        "last_page": last["page"] if last else None,
+                        "document": {"id": doc["id"], "name": doc["name"], "pages": doc["pages"],
+                                     "page_index": last["page_index"] if last and last["document_id"] == doc["id"] else None}
+                        if doc else None})
+        return out
+
     @api.get("/api/waiting")
     def list_waiting(conn: sqlite3.Connection = Depends(get_db)):
         """What waits in À trier: passages and links sent, with what was guessed. Newest first."""

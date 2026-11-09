@@ -174,3 +174,13 @@ def test_finding_stays_quick_in_a_long_pdf(library):
     best, others = matching.find(library["conn"], passage)
     assert time.perf_counter() - started < 2
     assert best.document_id == long_doc["id"] and best.pages[best.start[0]].index == long_doc["pages"] // 2
+
+
+def test_what_you_are_reading_comes_first_with_where_you_were(library):
+    c, a, b = library["c"], library["a"], library["b"]
+    c.post("/api/passages", json={"text": COPIED})                      # kept from the first PDF, p. 45
+    reading = c.get("/api/reading").json()
+    assert reading[0]["source"]["id"] == library["sa"]["id"] and reading[0]["last_page"] == "45"
+    assert reading[0]["document"]["id"] == a["id"] and reading[0]["document"]["page_index"] == 0
+    c.patch(f"/api/documents/{b['id']}", json={"source_id": library["sb"]["id"]})    # given its source: read now
+    assert c.get("/api/reading").json()[0]["source"]["id"] == library["sb"]["id"]
