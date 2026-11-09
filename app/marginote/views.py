@@ -55,7 +55,8 @@ def people_by_id(conn, ids) -> dict[int, dict]:
 
 # ---------- sources ----------
 
-SOURCE_FIELDS = ("kind", "title", "subtitle", "publisher", "edition", "year", "date", "isbn", "url", "language", "field")
+SOURCE_FIELDS = ("kind", "title", "subtitle", "publisher", "edition", "year", "date", "isbn", "url", "language", "field",
+                 "doi", "arxiv", "journal", "volume", "issue", "pages")
 
 SOURCE_LIST_SQL = """
 SELECT s.*,

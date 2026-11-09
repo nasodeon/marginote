@@ -10,7 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from . import db, linkinfo, lookup, names
+from . import db, ids, linkinfo, lookup, names
 from .context import Context, Library
 from .views import (SOURCE_LIST_SQL, entries_where, load_note, load_person, load_source, load_topic, note_dict,
                     note_dicts, people_by_id, person_brief, source_dict, source_dicts)
@@ -36,6 +36,12 @@ class SourceIn(BaseModel):
     url: str | None = None
     language: str | None = None
     field: str | None = Field(None, description="What kind of work: 'Philosophie', 'Roman'…")
+    doi: str | None = Field(None, description="A scientific article's DOI: '10.1103/PhysRevA.104.012345'")
+    arxiv: str | None = Field(None, description="Its arXiv number: '2401.01234'")
+    journal: str | None = Field(None, description="The journal (or collection) an article is in")
+    volume: str | None = None
+    issue: str | None = None
+    pages: str | None = Field(None, description="An article's pages in its journal: '45–56'")
     people: dict[Role, list[PersonRef]] = Field({}, description="{'author': ['Frédéric Lordon'], 'about': [12]}")
     topics: list[str] = []
     fetch_cover: bool = Field(True, description="Look for a cover online (books), in the background")
@@ -54,6 +60,12 @@ class SourcePatch(BaseModel):
     url: str | None = None
     language: str | None = None
     field: str | None = None
+    doi: str | None = None
+    arxiv: str | None = None
+    journal: str | None = None
+    volume: str | None = None
+    issue: str | None = None
+    pages: str | None = None
     people: dict[Role, list[PersonRef]] | None = Field(None, description="Only the roles given are replaced")
     topics: list[str] | None = None
 
@@ -160,6 +172,19 @@ def router(ctx: Context) -> APIRouter:
 
     # ----- sources -----
 
+    def clean_identifiers(conn: sqlite3.Connection, values: dict, source_id: int | None = None) -> None:
+        """A DOI or an arXiv number written any way ('https://doi.org/10.…', 'arXiv:2401.01234v2'), stored one
+        way; one source per article."""
+        for key, clean, label in (("doi", ids.clean_doi, "DOI"), ("arxiv", ids.clean_arxiv, "arXiv number")):
+            if values.get(key):
+                values[key] = clean(values[key])
+                if not values[key]:
+                    raise HTTPException(422, f"This {label} looks wrong")
+                same = conn.execute(f"SELECT id, title FROM sources WHERE {key} = ? AND id IS NOT ?",
+                                    (values[key], source_id)).fetchone()
+                if same:
+                    raise HTTPException(409, f"Already in your library: {same['title']} (source {same['id']})")
+
     @api.get("/api/sources", tags=["sources"])
     def list_sources(kind: Kind | None = None, conn: sqlite3.Connection = Depends(get_db)):
         """Everything in the library, the most recently used first."""
@@ -172,7 +197,9 @@ def router(ctx: Context) -> APIRouter:
             lib: Library = current):
         """Saved at once; a cover is looked for afterwards, so you never wait for it."""
         values = {k: blank_to_none(getattr(body, k)) for k in ("kind", "title", "subtitle", "publisher", "edition",
-                                                              "year", "isbn", "url", "language", "field")}
+                                                              "year", "isbn", "url", "language", "field", "doi", "arxiv",
+                                                              "journal", "volume", "issue", "pages")}
+        clean_identifiers(conn, values)
         values["date"] = check_date(body.date)
         if values["isbn"]:
             values["isbn"] = lookup.clean_isbn(values["isbn"])
@@ -224,6 +251,7 @@ def router(ctx: Context) -> APIRouter:
             changes["isbn"] = lookup.clean_isbn(changes["isbn"])
             if not changes["isbn"]:
                 raise HTTPException(422, "This ISBN looks wrong")
+        clean_identifiers(conn, changes, source_id)
         if changes.get("url"):
             try:
                 changes["url"] = linkinfo.clean_url(changes["url"])

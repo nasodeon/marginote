@@ -100,6 +100,7 @@ class _Head(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.meta: dict[str, str] = {}
+        self.authors: list[str] = []          # citation_author, one tag per author on journal sites and arXiv
         self.title = ""
         self.lang = ""
         self.ld: list[str] = []
@@ -113,6 +114,8 @@ class _Head(HTMLParser):
             self.lang = a["lang"]
         elif tag == "meta":
             key = (a.get("property") or a.get("name") or a.get("itemprop") or "").lower()
+            if key in ("citation_author", "dc.creator") and a.get("content"):
+                self.authors.append(a["content"].strip())
             if key and a.get("content") and key not in self.meta:
                 self.meta[key] = a["content"].strip()
         elif tag == "title" and not self.title:
@@ -165,8 +168,34 @@ def _names(value) -> list[str]:
 
 
 def _date(value: str | None) -> str | None:
-    m = re.match(r"(\d{4}-\d{2}-\d{2})", value or "")
-    return m.group(1) if m else None
+    m = re.match(r"(\d{4})[-/](\d{2})[-/](\d{2})", value or "")
+    return "-".join(m.groups()) if m else None
+
+
+def _citation_name(name: str) -> str:
+    """Journal sites write 'Marceau, Hélène': the app writes names as usually said."""
+    parts = [x.strip() for x in name.split(",")]
+    return f"{parts[1]} {parts[0]}" if len(parts) == 2 and parts[1] else name.strip()
+
+
+def citation(meta: dict, authors: list[str]) -> dict:
+    """What a scientific page says about the article for Google Scholar (Highwire 'citation_' tags, Dublin Core,
+    PRISM): DOI, arXiv number, journal, volume, pages, every author."""
+    from .ids import clean_arxiv, clean_doi
+    doi = clean_doi(meta.get("citation_doi") or meta.get("prism.doi") or meta.get("dc.identifier") or "")
+    first, last = meta.get("citation_firstpage"), meta.get("citation_lastpage")
+    return {
+        "doi": doi,
+        "arxiv": clean_arxiv(meta.get("citation_arxiv_id") or "") or (clean_arxiv(meta.get("citation_pdf_url") or "", labelled_only=True)),
+        "journal": meta.get("citation_journal_title") or meta.get("prism.publicationname") or meta.get("citation_conference_title"),
+        "volume": meta.get("citation_volume") or meta.get("prism.volume"),
+        "issue": meta.get("citation_issue") or meta.get("prism.number"),
+        "pages": f"{first}–{last}" if first and last and first != last else first,
+        "authors": list(dict.fromkeys(_citation_name(a) for a in authors if a)),
+        "title": meta.get("citation_title") or meta.get("dc.title"),
+        "date": _date(meta.get("citation_publication_date") or meta.get("citation_date") or meta.get("citation_online_date")
+                      or meta.get("dc.date") or meta.get("prism.publicationdate")),
+    }
 
 
 def _strip_site(title: str, site: str | None) -> str:
@@ -196,12 +225,15 @@ def parse_page(url: str, html: str) -> dict:
     if isinstance(article.get("image"), (str, dict)) and not image:
         image = article["image"] if isinstance(article["image"], str) else article["image"].get("url")
     og_type = m.get("og:type", "").lower()
+    cite = citation(m, head.authors)
     return {
-        "title": _strip_site(re.sub(r"\s+", " ", title or "").strip(), site) or None,
+        "title": (re.sub(r"\s+", " ", cite["title"]).strip() if cite["title"] else None)
+        or _strip_site(re.sub(r"\s+", " ", title or "").strip(), site) or None,
         "site": site or None,
-        "people": people,
-        "date": _date(m.get("article:published_time") or article.get("datePublished") or m.get("date")
-                      or m.get("og:published_time") or m.get("datepublished")),
+        "people": cite["authors"] or people,
+        "date": cite["date"] or _date(m.get("article:published_time") or article.get("datePublished") or m.get("date")
+                                      or m.get("og:published_time") or m.get("datepublished")),
+        **{k: cite[k] for k in ("doi", "arxiv", "journal", "volume", "issue", "pages")},
         "language": (head.lang or m.get("og:locale") or "").split("-")[0].split("_")[0].lower() or None,
         "image_url": urljoin(url, image) if image else None,
         "og_type": og_type,
@@ -232,7 +264,8 @@ def _read(url: str, client_factory) -> dict:
     podcast = _host_matches(host, PODCAST_HOSTS)
     oembed = _host_matches(host, tuple(OEMBED))
     info: dict = {"url": url, "kind": "video" if video else "podcast" if podcast else "article",
-                  "title": None, "site": None, "people": [], "date": None, "language": None, "image_url": None}
+                  "title": None, "site": None, "people": [], "date": None, "language": None, "image_url": None,
+                  "doi": None, "arxiv": None, "journal": None, "volume": None, "issue": None, "pages": None}
     with client_factory() as client:
         if oembed:
             try:

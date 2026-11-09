@@ -128,8 +128,22 @@ const KINDS = {
   talk: { name: 'Conférence', label: 'conférence', several: 'conférences', the: 'la conférence', this: 'cette conférence', maker: 'speaker', makerLabel: 'qui parle', publisher: 'événement ou lieu', where: 'diapo ou partie', photos: true, dated: true },
   other: { name: 'Autre', label: 'autre', several: 'autres', the: 'la source', this: 'cette source', maker: 'author', makerLabel: 'par', publisher: 'éditeur ou lieu', where: 'où', photos: true },
 };
-const kindOf = (s) => KINDS[s?.kind] || KINDS.book;
+// a scientific article (a DOI, an arXiv number or a journal) is quoted by page, like a book
+const isPaper = (s) => s?.kind === 'article' && Boolean(s.doi || s.arxiv || s.journal || s.pages);
+const PAPER = { ...KINDS.article, where: 'page' };
+const kindOf = (s) => (isPaper(s) ? PAPER : KINDS[s?.kind] || KINDS.book);
 const makers = (s) => [...(s.people?.author || []), ...(s.people?.speaker || []), ...(s.people?.editor || [])];
+// every author is kept; in a line, more than three are 'the first et al.'
+const shortNames = (list) => (list.length > 3 ? `${list[0]} et al.` : list.join(', '));
+// 'Revue d’exemple 12 (3), p. 45–56', or 'arXiv:2401.01234' for a preprint
+function inJournal(s) {
+  if (s.journal) {
+    const vol = [s.volume, s.issue ? `(${s.issue})` : null].filter(Boolean).join(' ');
+    const pages = s.pages ? (/^\d/.test(s.pages) ? `p.\u00a0${s.pages}` : s.pages).replace(/[–-]/g, '\u2060–\u2060') : null;   // kept on one line
+    return [[s.journal, vol].filter(Boolean).join(' '), pages].filter(Boolean).join(', ');
+  }
+  return s.arxiv ? `arXiv:${s.arxiv}` : null;
+}
 
 // ---------- talking to the server ----------
 
@@ -271,7 +285,7 @@ function topicLinks(list) {
 
 function sourceLine(s) {
   // 'book · Frédéric Lordon' / 'video · Philosophie à voix haute' / 'class · Jeanne Dupont · 2026'
-  const who = makers(s).map((p) => p.name).join(', ');
+  const who = shortNames(makers(s).map((p) => p.name));
   return joinDots([h('span', { class: 'sc', text: kindOf(s).label }), who || s.publisher || null, s.kind === 'class' && s.year ? String(s.year) : null,
     s.field ? h('i', { text: s.field }) : null]);
 }
@@ -891,16 +905,29 @@ async function viewSource({ args: [id] }) {
     })();
   }
   const people = source.people;
-  const details = joinDots([h('span', { class: 'sc', text: k.label }), source.publisher,
+  const journal = inJournal(source);
+  const details = joinDots([h('span', { class: 'sc', text: k.label }), journal ? h('i', { text: journal }) : source.publisher,
     source.date ? plainDate(source.date) : source.year, source.edition, source.field ? h('i', { text: source.field }) : null]);
+  const idLinks = joinDots([
+    source.doi ? h('a', { class: 'doi-link', href: `https://doi.org/${source.doi}`, target: '_blank', rel: 'noopener noreferrer', text: `doi:${source.doi}` }) : null,
+    source.arxiv && journal !== `arXiv:${source.arxiv}` ? h('a', { class: 'doi-link', href: `https://arxiv.org/abs/${source.arxiv}`, target: '_blank', rel: 'noopener noreferrer',
+      text: `arXiv:${source.arxiv}` }) : null]);
+  // a paper with many authors: the first three, and the others one tap away
+  const byLine = h('span', { class: 'by' });
+  const allMakers = makers(source);
+  const showMakers = (all) => put(byLine, all || allMakers.length <= 6 ? personLinks(allMakers)
+    : [...personLinks(allMakers.slice(0, 3)).map((x) => (x === ' et ' ? ', ' : x)), ' et ',
+      h('button', { class: 'link-btn inline', type: 'button', onclick: () => showMakers(true) }, `${allMakers.length - 3} autres`)]);
+  showMakers(false);
   const counts = [source.quote_count ? plural(source.quote_count, 'quote') : null, source.note_count ? plural(source.note_count, 'note') : null]
     .filter(Boolean).join(' · ');
   const info = h('div', { class: 'info' },
     h('h1', { text: source.title }),
     source.subtitle ? h('span', { class: 'it', text: source.subtitle }) : null,
-    makers(source).length ? h('span', { class: 'by' }, personLinks(makers(source))) : null,
+    allMakers.length ? byLine : null,
     people.translator.length ? h('span', { class: 'meta' }, 'traduit par ', personLinks(people.translator)) : null,
     h('span', { class: 'meta' }, details),
+    idLinks.length ? h('span', { class: 'meta' }, idLinks) : null,
     people.about.length ? h('span', { class: 'meta' }, 'sur ', personLinks(people.about)) : null,
     source.topics.length ? topicLinks(source.topics) : null,
     counts ? h('span', { class: 'counts', text: counts }) : null,
@@ -1126,7 +1153,7 @@ async function viewEntries({ params }) {
 function citation(e, source) {
   if (!source) return `${e.by?.name || ''}${e.page ? ', ' + e.page : ''}`;
   const who = e.words_by ? `${e.words_by.name}, cité dans ` : '';
-  const by = makers(source).map((p) => p.name).join(', ');
+  const by = shortNames(makers(source).map((p) => p.name));
   const place = where(e);
   return `${who}${by ? by + ', ' : ''}${source.title}${source.year ? ` (${source.year})` : source.date ? ` (${plainDate(source.date)})` : ''}${place ? ', ' + place : ''}`;
 }
@@ -2222,6 +2249,15 @@ async function viewSourceForm({ args: [id], params }) {
   const edition = field('s-edition', 'édition', {}, s.edition);
   const year = field('s-year', 'année', { inputmode: 'numeric' }, s.year);
   const date = field('s-date', 'date', { inputmode: 'numeric', placeholder: '2026-10-02' }, s.date);
+  // a scientific article: its DOI or arXiv number, and where it was published
+  const ids = { doi: s.doi || null, arxiv: s.arxiv || null };
+  const ident = field('s-ident', 'doi ou arxiv', { autocomplete: 'off', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false',
+    placeholder: '10.1000/xyz123 ou 2401.01234' }, s.doi || (s.arxiv ? `arXiv:${s.arxiv}` : ''));
+  const journal = field('s-journal', 'revue', { autocapitalize: 'words' }, s.journal);
+  const volume = field('s-volume', 'volume', { inputmode: 'numeric' }, s.volume);
+  const issue = field('s-issue', 'numéro', {}, s.issue);
+  const pages = field('s-pages', 'pages', { placeholder: '45–56' }, s.pages);
+  let journalOpen = Boolean(s.journal || s.volume || s.issue || s.pages || s.doi || s.arxiv);
   const makersIn = peopleInput('auteur(s)', [...s.people.author, ...s.people.speaker], people, { id: 's-makers' });
   const translators = peopleInput('traducteur(s)', s.people.translator, people, { id: 's-translators' });
   const editors = peopleInput('sous la direction de', s.people.editor, people, { id: 's-editors' });
@@ -2234,6 +2270,41 @@ async function viewSourceForm({ args: [id], params }) {
   const msg = h('div', { class: 'note-line', role: 'status' });
   const found = (existing) => (existing && existing.id !== s.id ? [' Déjà dans votre bibliothèque : ', h('a', { class: 'plink', href: `#/source/${existing.id}`, text: existing.title })] : []);
 
+  const named = (list) => list.map((n) => ({ key: 'new:' + fold(n), label: n, value: n }));
+  const showIds = () => { ident.input.value = ids.doi || (ids.arxiv ? `arXiv:${ids.arxiv}` : ''); };
+  const fillArticle = (f) => {
+    if (!editing && KINDS[f.kind]) kind = f.kind;
+    for (const [key, input] of Object.entries({ title, subtitle, publisher, journal, volume, issue, pages, isbn })) if (f[key]) input.input.value = f[key];
+    if (f.date || f.year) date.input.value = f.date || String(f.year);
+    if (f.year) year.input.value = f.year;
+    if (f.people?.author?.length) makersIn.set(named(f.people.author));     // every author is kept
+    if (f.people?.editor?.length) editors.set(named(f.people.editor));
+    if (f.language) language.value = ['fr', 'en'].includes(f.language) ? f.language : 'other';
+    if (f.url && !url.input.value.trim()) url.input.value = f.url;
+    ids.doi = f.doi || ids.doi;
+    ids.arxiv = f.arxiv || ids.arxiv;
+    showIds();
+    journalOpen = true;
+    layout();
+  };
+  const lookUpArticle = async () => {
+    const text = ident.input.value.trim();
+    if (!text) { ident.input.focus(); return; }
+    put(msg, 'Recherche…');
+    try {
+      const r = await api('/api/recognize', { method: 'POST', body: { text } });
+      if (r.kind === 'url') { url.input.value = r.value; showIds(); await readPage(); return; }
+      if (r.kind === 'isbn') { if (!editing) { kind = 'book'; layout(); } isbn.input.value = r.value; showIds(); await lookUp(); return; }
+      if (r.kind === 'text') { put(msg, 'Aucun DOI ni numéro arXiv ici. Un DOI ressemble à 10.1000/xyz123.'); return; }
+      ids[r.kind] = r.value;
+      if (r.kind === 'doi' && ids.arxiv && r.source?.arxiv !== ids.arxiv) ids.arxiv = r.source?.arxiv || null;
+      showIds();
+      if (r.existing && r.existing.id !== s.id) { put(msg, found(r.existing)); return; }
+      if (!r.source) { put(msg, `${r.note || 'Rien trouvé'}. Saisissez les détails.`); return; }
+      fillArticle(r.source);
+      put(msg, `Trouvé sur ${r.source.found_by}.`, found(r.existing));
+    } catch (err) { put(msg, err.message); }
+  };
   const lookUp = async (prefix = '') => {
     put(msg, `${prefix}Recherche…`);
     try {
@@ -2255,8 +2326,16 @@ async function viewSourceForm({ args: [id], params }) {
       if (f.title) title.input.value = f.title;
       if (f.site) publisher.input.value = f.site;
       if (f.date) date.input.value = f.date;
-      if (f.people?.length) makersIn.set(f.people.map((n) => ({ key: 'new:' + fold(n), label: n, value: n })));
+      if (f.people?.length) makersIn.set(named(f.people));
       if (f.language) language.value = ['fr', 'en'].includes(f.language) ? f.language : 'other';
+      if (f.doi || f.arxiv || f.journal) {          // a scientific article: its journal, every author
+        for (const [key, input] of Object.entries({ journal, volume, issue, pages })) if (f[key]) input.input.value = f[key];
+        ids.doi = f.doi || ids.doi;
+        ids.arxiv = f.arxiv || ids.arxiv;
+        showIds();
+        journalOpen = true;
+        layout();
+      }
       coverUrl = f.image_url;
       put(msg, 'Détails lus sur la page.', found(f.existing));
     } catch (err) { put(msg, err.message); }
@@ -2279,6 +2358,13 @@ async function viewSourceForm({ args: [id], params }) {
     h('button', { class: 'btn small', type: 'button', onclick: () => lookUp() }, 'Chercher'),
     h('label', { class: 'btn small file-btn' }, icon('camera', 16), 'Dos du livre', backCover));
   const urlRow = h('div', { class: 'two' }, h('div', { class: 'grow' }, url.el), h('button', { class: 'btn small', type: 'button', onclick: readPage }, 'Lire la page'));
+  ident.input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); lookUpArticle(); } });
+  const identRow = h('div', { class: 'two' }, h('div', { class: 'grow' }, ident.el),
+    h('button', { class: 'btn small', type: 'button', onclick: lookUpArticle }, 'Chercher'));
+  const journalBox = h('div', { class: 'journal-box' }, journal.el,
+    h('div', { class: 'two' }, h('div', { class: 'w-short' }, volume.el), h('div', { class: 'w-short' }, issue.el), h('div', { class: 'grow' }, pages.el)));
+  const journalOpener = h('button', { class: 'link-btn more-fields', type: 'button', onclick: () => { journalOpen = true; layout(); journal.input.focus(); } },
+    '+ Revue, volume, pages');
   const editionBox = h('div', { class: 'grow' }, edition.el);
   const bookOnly = [subtitle.el, translators.el, editors.el, editionBox];
   const yearBox = h('div', { style: { width: '110px' } }, year.el);
@@ -2291,10 +2377,13 @@ async function viewSourceForm({ args: [id], params }) {
       onclick: () => { kind = key; layout(); } }, v.name)));
     isbnRow.hidden = !(kind === 'book' || kind === 'ebook');
     urlRow.hidden = !(k.link || source?.url || kind === 'ebook');
+    identRow.hidden = !(kind === 'article' || ids.doi || ids.arxiv);
+    journalBox.hidden = !(kind === 'article' && journalOpen);
+    journalOpener.hidden = !(kind === 'article' && !journalOpen);
     for (const el of bookOnly) el.hidden = !(kind === 'book' || kind === 'ebook');
     yearBox.hidden = Boolean(k.dated);
     dateBox.hidden = !k.dated;
-    publisher.el.firstChild.textContent = k.publisher;
+    publisher.el.firstChild.textContent = kind === 'article' && journalOpen ? 'éditeur' : k.publisher;
     makersIn.el.querySelector('.label').textContent = k.makerLabel;
   }
   layout();
@@ -2305,7 +2394,15 @@ async function viewSourceForm({ args: [id], params }) {
     const k = KINDS[kind];
     const roles = { author: k.maker === 'author' ? makersIn.value : [], speaker: k.maker === 'speaker' ? makersIn.value : [], about: about.value };
     if (kind === 'book' || kind === 'ebook') Object.assign(roles, { translator: translators.value, editor: editors.value });
-    return { kind, title: title.input.value, subtitle: subtitle.input.value, publisher: publisher.input.value, edition: edition.input.value,
+    // the field holds the DOI, or the arXiv number when there is no DOI; the other one is kept as found
+    const idText = identRow.hidden ? null : ident.input.value.trim();
+    const isDoi = /(^|doi\.org\/|^doi:?\s*)10\.\d{4,9}\//i.test(idText || '');     // arXiv's own DOIs too: 10.48550/arXiv.…
+    const isArxiv = !isDoi && /arxiv|^\d{4}\.\d{4,5}(v\d+)?$|^[a-z-]+(\.[a-z]{2})?\/\d{7}(v\d+)?$/i.test(idText || '');
+    const article = kind === 'article';
+    Object.assign(ids, idText === null ? {} : !idText ? { doi: null, arxiv: null } : isArxiv ? { arxiv: idText } : { doi: idText });
+    return { kind, doi: ids.doi, arxiv: ids.arxiv,
+      journal: article ? journal.input.value : null, volume: article ? volume.input.value : null,
+      issue: article ? issue.input.value : null, pages: article ? pages.input.value : null, title: title.input.value, subtitle: subtitle.input.value, publisher: publisher.input.value, edition: edition.input.value,
       year: !k.dated && y ? Number(y) : null, date: k.dated ? date.input.value : null, isbn: isbnRow.hidden ? null : isbn.input.value,
       url: url.input.value, language: lang, field: fieldIn.input.value, people: roles, topics: topicsIn.value };
   };
@@ -2369,17 +2466,19 @@ async function viewSourceForm({ args: [id], params }) {
     h('div', { class: 'details' },
       kindSeg,
       coverBox,
-      isbnRow, urlRow,
+      isbnRow, identRow, urlRow,
       msg,
       title.el, subtitle.el,
       makersIn.el, translators.el,
       about.el, topicsIn.el,
+      journalBox,
       h('div', { class: 'two' }, h('div', { class: 'grow' }, publisher.el), yearBox, dateBox),
+      journalOpener,
       fieldIn.el,
       h('div', { class: 'two' }, editionBox, h('label', { class: 'field grow', for: 's-language' }, h('span', { text: 'langue' }), language)),
       editors.el,
       h('button', { class: 'btn primary big', type: 'submit' }, editing ? 'Enregistrer' : 'Ajouter')));
-  if (!editing) setTimeout(() => (isbnRow.hidden ? (urlRow.hidden ? title.input : url.input) : isbn.input).focus(), 50);
+  if (!editing) setTimeout(() => (!isbnRow.hidden ? isbn.input : !identRow.hidden ? ident.input : !urlRow.hidden ? url.input : title.input).focus(), 50);
   return { el, bare: !isWide(), nav: 'library' };
 }
 

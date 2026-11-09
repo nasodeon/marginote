@@ -172,10 +172,19 @@ class Writer:
         return {"type": "note", "id": n["id"], "title": clean(n["title"]), "place": clean(n["place"]),
                 "paras": [" ".join(p.splitlines()) for p in paras], "topics": [t["name"] for t in n["topics"]]}
 
+    def in_journal(self, s: dict) -> str | None:
+        """'Revue d'exemple 12 (3), p. 45–56', or 'arXiv:2401.01234' for a preprint."""
+        if s.get("journal"):
+            vol = " ".join(x for x in (s.get("volume"), f"({s['issue']})" if s.get("issue") else None) if x)
+            pages = f"{self.w['page']}\u00a0{s['pages']}" if s.get("pages") and not str(s["pages"]).startswith("e") else s.get("pages")
+            return ", ".join(x for x in (" ".join(x for x in (s["journal"], vol) if x), pages) if x)
+        return f"arXiv:{s['arxiv']}" if s.get("arxiv") else None
+
     def source_head(self, sid: int) -> dict:
         s = self.lib.sources[sid]
         meta = [self.names(self.lib.makers(s))] if self.lib.makers(s) else []
-        meta += [x for x in (self.w["kinds"].get(s["kind"]), s["publisher"], self.lib.year(s)) if x]
+        journal = self.in_journal(s)
+        meta += [x for x in (journal or self.w["kinds"].get(s["kind"]), None if journal else s["publisher"], self.lib.year(s)) if x]
         return {"title": s["title"], "subtitle": s["subtitle"] or "", "meta": " · ".join(meta)}
 
     def bib_entry(self, sid: int) -> list:
@@ -183,9 +192,16 @@ class Writer:
         makers = self.lib.makers(s)
         runs = [["; ".join(self.lib.people[i]["sort_name"] for i in makers) + ", ", False]] if makers else []
         runs.append([s["title"] + (f". {s['subtitle']}" if s["subtitle"] else ""), True])
-        rest = [x for x in (self.w["kinds"].get(s["kind"]), s["publisher"], self.lib.year(s)) if x]
+        journal = self.in_journal(s)
+        if journal:                         # an article: in its journal, then the year
+            rest = [journal, self.lib.year(s)]
+        else:
+            rest = [self.w["kinds"].get(s["kind"]), s["publisher"], self.lib.year(s)]
+        rest = [x for x in rest if x]
         runs.append([(", " + ", ".join(rest) if rest else "") + ".", False])
-        if s["url"] and s["kind"] in ("article", "video", "podcast"):
+        if s.get("doi"):
+            runs.append([f" doi:{s['doi']}", False])
+        elif s["url"] and s["kind"] in ("article", "video", "podcast"):
             runs.append([" " + s["url"], False])
         return runs
 

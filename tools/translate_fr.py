@@ -71,7 +71,7 @@ const WORDS = { quote: ['citation', 'citations'], note: ['note', 'notes'], sourc
 const plural = (n, word) => { const w = WORDS[word] || [word, word + 's']; return `${n} ${n <= 1 ? w[0] : w[1]}`; };""")
 
     a = s.index("// What each kind of source is called")
-    b = s.index("const kindOf = ")
+    b = s.index("\n};\n", a) + 4
     s = s[:a] + """// What each kind of source is called, what it is made by, and how to say where in it a passage is.
 // notesFirst: mostly your own notes on it (a video, a class), so capture starts on Note and its page shows them first.
 const KINDS = {
@@ -89,8 +89,8 @@ const KINDS = {
     # the kind of a source, as shown
     ctx("  return joinDots([h('span', { class: 'sc', text: s.kind }), who || s.publisher || null,",
         "  return joinDots([h('span', { class: 'sc', text: kindOf(s).label }), who || s.publisher || null,")
-    ctx("  const details = joinDots([h('span', { class: 'sc', text: source.kind }), source.publisher,",
-        "  const details = joinDots([h('span', { class: 'sc', text: k.label }), source.publisher,")
+    ctx("  const details = joinDots([h('span', { class: 'sc', text: source.kind }), journal ? h('i', { text: journal }) : source.publisher,",
+        "  const details = joinDots([h('span', { class: 'sc', text: k.label }), journal ? h('i', { text: journal }) : source.publisher,")
     ctx("        k.link && source.kind !== 'article' ? `Open the ${source.kind}` : 'Open the link', icon('external', 14)) : null,",
         "        k.link && source.kind !== 'article' ? `Ouvrir ${k.the}` : 'Ouvrir le lien', icon('external', 14)) : null,")
     ctx("      `Delete this ${k.name.toLowerCase()}…`)));", "      `Supprimer ${k.this}…`)));")
@@ -598,6 +598,19 @@ const KINDS = {
         "Authors": "Auteurs",
         "with your comments": "avec vos commentaires",
         "Bibliography at the end": "Bibliographie à la fin",
+        # scientific articles
+        "doi or arxiv": "doi ou arxiv",
+        "10.1000/xyz123 or 2401.01234": "10.1000/xyz123 ou 2401.01234",
+        "journal": "revue",
+        "issue": "numéro",
+        "publisher": "éditeur",
+        "+ Journal, volume, pages": "+ Revue, volume, pages",
+        "Looking up…": "Recherche…",
+        "No DOI or arXiv number found here. A DOI looks like 10.1000/xyz123.":
+            "Aucun DOI ni numéro arXiv ici. Un DOI ressemble à 10.1000/xyz123.",
+        "${r.note || 'Nothing found'}. Type the details in.": "${r.note || 'Rien trouvé'}. Saisissez les détails.",
+        "Found on ${r.source.found_by}.": "Trouvé sur ${r.source.found_by}.",
+        "${allMakers.length - 3} others": "${allMakers.length - 3} autres",
     }
     pat = re.compile(r"'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`")
     used = {k: 0 for k in L}

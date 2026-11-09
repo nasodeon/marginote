@@ -454,9 +454,9 @@ def test_upgrade_from_version_0_4_keeps_everything(settings):
         assert c.get("/api/search", params={"q": "appuhn"}).json()[0]["id"] == 11
         status = c.get("/api/backup/status").json()
         before = sorted(x["file"][:13] for x in status["copies"] if x["kind"] == "before upgrade")
-        assert before == ["before-0.6.0-", "before-0.7.1-"]       # the new shape, and the move to users/owner
+        assert before == ["before-0.7.1-", "before-0.9.0-"]       # the move to users/owner, and the new shape
     # the copy made before the upgrade is the old database, ready to go back to version 0.4
-    copy = next(owner(settings).backups_dir.glob("before-0.6.0-*.zip"))
+    copy = next(owner(settings).backups_dir.glob("before-0.9.0-*.zip"))
     old = settings.data_dir / "old.db"
     old.write_bytes(zipfile.ZipFile(copy).read("marginote.db"))
     conn = sqlite3.connect(old)
@@ -503,10 +503,10 @@ def test_upgrade_from_version_0_5_turns_comments_into_notes(settings, monkeypatc
         assert {s["id"]: s["note_count"] for s in c.get("/api/sources").json()}[3] == 2
         assert {n["id"] for n in c.get("/api/notes", params={"q": "mille plateaux"}).json()} == {4, rhizome["id"]}
         before = sorted(x["file"][:13] for x in c.get("/api/backup/status").json()["copies"] if x["kind"] == "before upgrade")
-        assert before == ["before-0.6.0-", "before-0.7.1-"]
+        assert before == ["before-0.7.1-", "before-0.9.0-"]
         assert c.post("/api/sources", json={"kind": "class", "title": "Un cours", "fetch_cover": False}).status_code == 201
     conn = sqlite3.connect(owner(settings).db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.LATEST
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()
 

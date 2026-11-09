@@ -328,7 +328,56 @@ CREATE VIEW entry_topic (entry_id, topic_id) AS
     SELECT entry_id, topic_id FROM entry_topics WHERE included = 1;
 """
 
-LATEST = 6
+# Version 7: scientific articles (DOI, arXiv, journal…), PDFs kept with their source (each page stored like a
+# photo, its words read from the PDF), the text of those pages for finding a passage sent from another app,
+# passages waiting for a source, and what is being read now.
+SCHEMA_V7 = """
+ALTER TABLE sources ADD COLUMN doi TEXT;
+ALTER TABLE sources ADD COLUMN arxiv TEXT;
+ALTER TABLE sources ADD COLUMN journal TEXT;         -- the journal or the collection an article is in
+ALTER TABLE sources ADD COLUMN volume TEXT;
+ALTER TABLE sources ADD COLUMN issue TEXT;
+ALTER TABLE sources ADD COLUMN pages TEXT;           -- an article's pages in its journal: '45-56', 'e1043'
+CREATE INDEX sources_doi ON sources (doi);
+CREATE INDEX sources_arxiv ON sources (arxiv);
+
+CREATE TABLE documents (
+    id          TEXT PRIMARY KEY,
+    source_id   INTEGER REFERENCES sources (id) ON DELETE SET NULL,
+    path        TEXT NOT NULL,                       -- inside pdfs/
+    name        TEXT,                                -- the file's name when it was sent
+    sha256      TEXT NOT NULL,
+    pages       INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'reading',     -- 'reading', 'ready' or 'failed'
+    queued      INTEGER NOT NULL DEFAULT 1,          -- 1: in À trier
+    found       TEXT,                                -- what was recognised in it (JSON)
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX documents_source ON documents (source_id);
+CREATE INDEX documents_sha256 ON documents (sha256);
+ALTER TABLE photos ADD COLUMN document_id TEXT REFERENCES documents (id) ON DELETE CASCADE;
+ALTER TABLE photos ADD COLUMN page_index INTEGER;    -- 0 for a PDF's first page
+CREATE INDEX photos_document ON photos (document_id, page_index);
+CREATE VIRTUAL TABLE page_fts USING fts5 (text, tokenize = 'unicode61 remove_diacritics 2');   -- rowid: the photo's
+
+CREATE TABLE waiting (
+    id          INTEGER PRIMARY KEY,
+    text        TEXT,
+    url         TEXT,
+    title       TEXT,
+    origin      TEXT,                                -- 'windows', 'iphone', 'android', 'web', 'app'
+    source_id   INTEGER REFERENCES sources (id) ON DELETE SET NULL,   -- a guess, to confirm
+    reason      TEXT,                                -- why it waits: 'source', 'page'
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE library_state (
+    key    TEXT PRIMARY KEY,
+    value  TEXT
+);
+"""
+
+LATEST = 7
 MAKER_ROLES = ("author", "editor", "speaker")      # roles that make a person's "works"
 ROLES = ("author", "translator", "editor", "speaker", "about")
 KINDS = ("book", "ebook", "article", "video", "podcast", "class", "talk", "other")
@@ -385,6 +434,12 @@ def migrate(db_path: Path, before_upgrade: Callable[[int], None] | None = None) 
             _to_v5(conn)
         if old < 6:
             _to_v6(conn)
+        if old < 7 <= LATEST:
+            conn.execute("BEGIN")
+            for statement in _statements(SCHEMA_V7):
+                conn.execute(statement)
+            conn.execute("PRAGMA user_version = 7")
+            conn.commit()
         if old > 0:
             conn.execute("VACUUM")   # give back the space the old tables took
     finally:

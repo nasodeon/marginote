@@ -28,7 +28,7 @@ from .context import Context
 
 VERSION = "0.8.0"
 # the release that gave the database its current shape: names the copy made before upgrading to it
-SHAPE_CHANGED_IN = "0.6.0"
+SHAPE_CHANGED_IN = "0.9.0"
 # the release that gave every library, the owner's too, its own folder: names the copy made before the move
 FOLDERS_CHANGED_IN = "0.7.1"
 STATIC = Path(__file__).parent / "static"
