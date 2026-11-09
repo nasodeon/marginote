@@ -27,7 +27,7 @@ from .accounts import LANGUAGES, OWNER, check_password, public
 from .config import Settings, load_settings
 from .context import Context
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 # the release that gave the database its current shape: names the copy made before upgrading to it
 SHAPE_CHANGED_IN = "0.9.0"
 # the release that gave every library, the owner's too, its own folder: names the copy made before the move

@@ -1,8 +1,9 @@
 # Marginote
 
-Self-hosted quotes and notes on what you read, watch, listen to and study: books, ebooks, articles, videos,
-podcasts, classes, talks. Photograph a page or share a link, keep the passage or write a note, say whom and
-what it is about, and find it again by source, by person or by topic. Your notes and photos stay on your own server;
+Self-hosted quotes and notes on what you read, watch, listen to and study: books, ebooks, articles, scientific
+papers, videos, podcasts, classes, talks. Photograph a page, import a PDF, share a link or send a passage
+from your PDF reader; keep the passage or write a note, say whom and what it is about, and find it again
+by source, by person or by topic. Your notes and photos stay on your own server;
 the app is reachable only through your private Tailscale network.
 
 ## How it is organised
@@ -25,6 +26,32 @@ the app is reachable only through your private Tailscale network.
 Every section and group of a page folds away with its − button (+ shows it again); each device remembers
 what you folded.
 
+**Adding** (Ajouter) starts from one place for anything: paste a passage, a link, a DOI, an arXiv number or an
+ISBN; take a photo; choose or drop photos, screenshots and PDFs. Below it: what waits in À trier, and what you
+are reading, with where you were. A passage chosen on a photo or a PDF page is kept at once with its page
+(« Garder ce passage »); the next screen offers the rest (comment, who it is about, topics, whose words),
+saved as you type, then « Passage suivant » goes back to the same page, which marks in its margin what was
+already kept.
+
+**Scientific papers**: a DOI or an arXiv number (pasted, or printed on a PDF's first page, or in a journal
+page's citation tags) brings the title, every author, the journal, volume, issue, pages and date, from
+Crossref, DataCite or arXiv. Every author is kept; lists show « Marceau et al. » beyond three.
+
+**PDFs** are imported once and kept with their source. Each page is read on the server (its text with the
+place of every word; a scanned page with Tesseract, like a photo) and then works like a page photo: choose
+a passage on it, see a quote highlighted on its page, open the PDF itself at that page. Page numbers are
+the ones printed (or counted from the article's first page in its journal).
+
+**Reading in your own PDF reader**: copy a passage and send it (Ctrl+Alt+M on Windows, Partager on a phone):
+Marginote finds it in the PDFs it keeps, starting with the one you are reading, and keeps it with its source
+and page, in the PDF's own clean words. It is compared letter by letter, so a line broken in the middle of
+a word, a ligature, a footnote number glued to a word, a footnote or running head caught in the selection,
+or a passage running onto the next page make no difference. A passage found nowhere, or in two places,
+waits in À trier with its best guess, to confirm in one tap.
+
+**À trier** (the inbox) is one list, by source: PDFs to recognise, page photos sent to be sorted later,
+passages and links sent from elsewhere.
+
 **Export** (Settings › Export): your quotes and notes as a PDF or a Word file, organised by author, by topic
 or by source, for the ones you tick or all of them. Page 1 has a table of contents you can tap. In each
 chapter, sources come by author then year, quotes in page order, each with its reference (« Auteur, *Titre*,
@@ -40,13 +67,17 @@ source author's unless you name someone else (a quote within a quote).
 - `app/` — the app: FastAPI, SQLite with full-text search, Tesseract text recognition (French and English)
   with shadow removal and straightening of pages that curve toward the spine (Leptonica), page-number
   detection, book details from Open Library, Google Books and the BnF catalogue, the ISBN read from a photo
-  of the back cover, page details read from a link, and an inbox of photos sent to be sorted later
+  of the back cover, page details read from a link, articles from Crossref, DataCite and arXiv, PDFs read
+  with PDFium (`pdfs.py`, `documents.py`), copied passages found in them (`matching.py`), and an inbox of
+  what waits to be sorted
+- `app/marginote/static/marginote-windows.ps1` — the Windows installer that Settings fills in with your
+  address and a sending key
 - `app/marginote/static/` — the screens, for phone and computer, set like a LaTeX document. Plain
   JavaScript; the fonts (Computer Modern Unicode, SIL Open Font License, Latin subset) are served by the app
 - `docker-compose.yml` — what you paste into your Docker app: the app plus a Tailscale container that
   gives it a private HTTPS address
-- `.github/workflows/image.yml` — on every push, runs the tests and publishes the image to
-  `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.8.0`)
+- `.github/workflows/image.yml` — on every push, runs the tests and checks the image starts; on `main`
+  only, publishes it to `ghcr.io/<owner>/marginote`, tagged `latest` and with its version (`0.9.0`)
 
 ## Install
 
@@ -104,6 +135,10 @@ photos and covers all stay.
 - 0.7.2: Android's Share menu, and the French tab names fit narrow phones. Nothing changes in the data.
 - 0.8.0: export to PDF and Word. Nothing changes in the data; the image is about 90 MB bigger (the
   typesetting program that makes the PDFs).
+- 0.9.0: PDFs, scientific papers, sending keys, one Ajouter screen. The database gains the article fields
+  of a source (DOI, arXiv, journal, volume, issue, pages), PDFs and their pages, passages waiting to be
+  sorted, and what you are reading; a copy is made first, to `before-0.9.0-<date>.zip`. Nothing already
+  there changes. A `pdfs/` folder appears in each library.
 
 Do not use a one-click "update" or "recreate" button on the `marginote` container (UGOS, Portainer…): it
 shares the Tailscale container's network, and those buttons cannot rebuild such a container (Docker
@@ -113,7 +148,8 @@ answers "conflicting options: hostname and the network mode"), which leaves it d
 
 | Back to | Copy to restore | Image |
 | --- | --- | --- |
-| 0.7.2 | none: nothing changed in the data | `marginote:0.7.2` |
+| 0.8.0 | `before-0.9.0-<date>.zip` | `marginote:0.8.0` |
+| 0.7.2 | `before-0.9.0-<date>.zip` | `marginote:0.7.2` |
 | 0.7.1 | none: nothing changed in the data | `marginote:0.7.1` |
 | 0.6.1 | none: the database is the same | `marginote:0.6.1` |
 | 0.5.1 | `before-0.6.0-<date>.zip` | `marginote:0.5.1` |
@@ -124,13 +160,17 @@ answers "conflicting options: hostname and the network mode"), which leaves it d
    `marginote.db-wal` and `marginote.db-shm` if present), `photos/`, `covers/` and `backups/` from
    `data/users/owner/` up into `data/`. The other people's libraries stay in `data/users/`, unused by
    those versions.
-3. For 0.5.1 or 0.4.0: move `data/marginote.db` aside, unzip the copy from `data/backups/` and put its
+3. For 0.8.0 and 0.7.2: in `data/users/owner/` (and each person's folder), move `marginote.db` aside, unzip
+   `before-0.9.0-<date>.zip` from its `backups/` and put its `marginote.db` in its place. Their `pdfs/`
+   folders are not used by those versions; keep them for when you upgrade again.
+   For 0.5.1 or 0.4.0: move `data/marginote.db` aside, unzip the copy from `data/backups/` and put its
    `marginote.db` in `data/`.
 4. In the compose file, replace `marginote:latest` with the image above, and deploy.
 
 Photos and covers stay where they are, and the older version finds them (with 0.4.0, a cover replaced
 since shows blank until you look it up again). What you captured since the upgrade is not in the old
-database. The code of each version is on its branch: `release-0.4`, `release-0.5`, `release-0.6`, `release-0.7`.
+database. The code of each version is on its branch: `release-0.4`, `release-0.5`, `release-0.6`, `release-0.7`,
+`release-0.8`.
 
 ## Sending from other apps
 
@@ -146,8 +186,20 @@ database. The code of each version is on its branch: `release-0.4`, `release-0.5
   Android lists «Marginote» in its Share menu: select text in any app, tap Share › Marginote, and the app
   opens with the passage, as on the iPhone. A shared page brings its link and title. Install from Chrome,
   not Samsung Internet; an icon with a small Chrome logo is a plain shortcut, which is not in the Share menu.
-- **From an app without Share in its menu** (Kindle): copy the passage, then Capture › Paste what you
-  copied.
+- **From an app without Share in its menu** (Kindle): copy the passage, then Ajouter › Coller.
+- **Without opening the app, with a sending key**: Settings › Sending keys makes a key for one device. A key
+  can only add to your library (a passage, a PDF, a photo), never read it; only its SHA-256 is kept, in
+  `data/accounts.json`, and deleting it stops it at once.
+  - **Windows**: Settings fills in an installer with your address and the key; run it once in PowerShell
+    (the exact line is shown), no administrator rights needed. Then in any app (a PDF reader, a browser,
+    Word), copy a passage and press **Ctrl+Alt+M**: a notification says where it was kept (« Gardé · *La
+    mémoire trie*, p. 45 ») or that it waits in À trier. **Ctrl+Alt+N** asks for a comment first.
+    Right-click a PDF or an image › Envoyer vers › Marginote sends the file. The installer writes a small
+    script and the key to `%LOCALAPPDATA%\Marginote`, two shortcuts to the Start menu and one to Envoyer
+    vers, then deletes itself.
+  - **iPhone**: a second shortcut, « Marginote · envoyer », sends what you select in Fichiers or Livres to
+    `/api/send/passage` and shows the answer as a notification, without leaving the PDF. Settings lists
+    its steps, with the key filled in.
 
 The shortcut opens `https://<your address>/#/capture?share=` followed by what was shared, URL-encoded. On
 Android the manifest's `share_target` sends it to `/share`, which hands it on to the same address; nothing
@@ -159,6 +211,9 @@ is kept or logged on the way.
   in your Docker app now and then; nothing of yours is in them.
 - Page photos are stored as WebP, about 200-350 KB each. Photos no quote uses are deleted after a day;
   photos in the inbox stay until you sort them.
+- PDFs are kept as sent. Their pages are drawn as pictures only when looked at, never stored; the words
+  of each page (for choosing a passage and finding one sent from a reader) take about 20 KB of the
+  database per page.
 - Covers and video pictures: WebP, at most 600 px, about 30 KB.
 - The database holds text: a few MB even for thousands of quotes. The words read on each photo (kept so a
   passage can be chosen again) are stored compressed, about a tenth of their plain size.
@@ -170,7 +225,7 @@ Every night (03:00 in the container's time zone, `TZ`) the app writes a consiste
 database to its `backups/` folder (`data/users/owner/backups/marginote-<date>.zip` for yours). It keeps the
 last 14 days and the first copy of each of the last 6 months; copies made before an upgrade are never
 removed. Settings shows the copies and the space used, makes
-a copy on demand, and downloads everything as one zip (database, photos, covers).
+a copy on demand, and downloads everything as one zip (database, photos, covers, PDFs).
 
 These copies sit next to the database. Also back up the whole `data` folder from the NAS: snapshots of the
 shared folder, and a scheduled copy to another disk, run after the nightly copy.
@@ -187,7 +242,7 @@ Everything lives in the data folder:
 
 ```
 data/
-  accounts.json                 the accounts: names, languages, scrambled passwords (scrypt)
+  accounts.json                 the accounts: names, languages, scrambled passwords (scrypt), sending keys (SHA-256)
   secret_key                    signs the login cookies
   users/
     owner/                      your library
@@ -195,12 +250,15 @@ data/
       photos/inbox/             pages sent to be sorted later
       photos/<Title> (<id>)/    a source's page photos, named after their page: p168 - 1a2b3c4d.webp
       covers/<id>.webp          covers and video pictures
+      pdfs/inbox/               PDFs not yet given their source
+      pdfs/<Title> (<id>)/      a source's PDFs, under the name they were sent with
       backups/                  database copies (zips)
     <id>/                       another person's library, laid out the same way
     removed/                    libraries of removed accounts, set aside
 ```
 
-A source's folder is renamed with it, and empty folders are removed. When a page was curved, the photo kept
+A source's folders are renamed with it, and empty folders are removed. Deleting a source deletes its PDFs;
+quotes taken from a deleted PDF keep their text and page. When a page was curved, the photo kept
 is the straightened one, since the word positions used to select a passage refer to it.
 
 ## Options
@@ -222,7 +280,8 @@ Set in the compose file's `environment` list; all optional.
 - Nothing leaves your server except lookups you ask for: an ISBN, or a title and author when a cover is
   searched (Open Library, Google Books, the BnF; covers also from Amazon's image server, by ISBN); and the
   link you give when its details are read (the page itself, or for a video its platform's oEmbed service:
-  YouTube, Vimeo, Dailymotion, Spotify). `LOOKUPS_ENABLED=false` turns all of them off. A photo of a back
+  YouTube, Vimeo, Dailymotion, Spotify); a DOI or an arXiv number (Crossref, then DataCite; arXiv), never
+  the PDF or a passage. `LOOKUPS_ENABLED=false` turns all of them off. A photo of a back
   cover is read on your server and not kept.
 - Links to addresses inside your own network (the NAS, the router, your Tailscale devices) are never
   fetched.
@@ -233,6 +292,8 @@ Set in the compose file's `environment` list; all optional.
 - No access log: your searches and the pages you open are not written to the Docker logs.
 - The app's pages load nothing from outside (no web fonts, scripts or trackers from other sites); a
   Content-Security-Policy header enforces it. Only `/docs` loads its viewer from a public CDN.
+- A PDF opens in the browser from a link signed for your library and valid for a few hours (so the iPhone
+  app can hand it to Safari, whose login is separate); the link opens that PDF only.
 - Your password lives only in your compose file; it is never written to the database. Changing it
   logs every device out. The other accounts' passwords are kept scrambled (scrypt) in
   `data/accounts.json`, never as typed; a new password logs that person out everywhere.
@@ -242,7 +303,9 @@ Set in the compose file's `environment` list; all optional.
 Measured on real page photos: about 65 MB of memory at rest, about 180 MB at most while reading a page
 (one page at a time; Tesseract itself about 70 MB, at another moment), 3 to 5 seconds per page, one core.
 An export is made one at a time, never while a page is being read: a PDF of 3,000 quotes takes about
-2 seconds and 280 MB more memory, a Word file about 3 seconds. The compose file caps the app at 512 MB.
+2 seconds and 280 MB more memory, a Word file about 3 seconds. A PDF with text is read in the background at
+about 70 ms a page (a scanned page, like a photo: 3 to 5 seconds) with about 70 MB more memory; drawing a
+page to look at it takes about 0.2 s. Finding a passage sent from a reader takes 10 to 70 ms. The compose file caps the app at 512 MB.
 
 ## Tests
 
